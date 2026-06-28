@@ -1,1 +1,5 @@
+User-agent: *
 
+Allow: /
+
+Sitemap: https://live-trading-signals.onrender.com/sitemap.xml
