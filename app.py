@@ -1,5 +1,12 @@
 from flask import Flask, render_template, jsonify
 import requests
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+import time
+_session=requests.Session()
+_cache={'ts':0,'data':None}
+_lock=Lock()
+
 @app.route("/sitemap.xml")
 def sitemap():
 
@@ -94,7 +101,7 @@ def find_signal_origin(klines):
 
 
 def fetch_pair_data(symbol, label, pip_size):
-    r = requests.get(
+    r = _session.get(
         'https://api.binance.com/api/v3/klines',
         params={'symbol': symbol, 'interval': INTERVAL, 'limit': TOTAL_CANDLES},
         timeout=10,
@@ -136,12 +143,14 @@ def fetch_pair_data(symbol, label, pip_size):
     }
 
 
-def fetch_all():
+def _fetch_all():
     results = []
     errors = []
-    for p in PAIRS:
-        try:
-            results.append(fetch_pair_data(p['symbol'], p['label'], p['pip_size']))
+    with ThreadPoolExecutor(max_workers=min(5,len(PAIRS))) as ex:
+        futs=[ex.submit(fetch_pair_data,p['symbol'],p['label'],p['pip_size']) for p in PAIRS]
+        for f,p in zip(futs,PAIRS):
+            try:
+                results.append(f.result())
         except requests.RequestException as e:
             errors.append({'symbol': p['symbol'], 'label': p['label'], 'error': f'Veriye ulasilamadi: {e}'})
         except Exception as e:
@@ -153,6 +162,15 @@ def fetch_all():
 def index():
     return render_template('index.html')
 
+
+def fetch_all():
+    with _lock:
+        if _cache['data'] and time.time()-_cache['ts']<60:
+            return _cache['data']
+    data=_fetch_all()
+    with _lock:
+        _cache['data']=data;_cache['ts']=time.time()
+    return data
 
 @app.route('/api')
 def api():
