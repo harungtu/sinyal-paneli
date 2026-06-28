@@ -1,5 +1,9 @@
 from flask import Flask, render_template, jsonify
 import requests
+@app.route("/sitemap.xml")
+def sitemap():
+
+    return send_from_directory("", "sitemap.xml")
 
 @app.route("/robots.txt")
 def robots():
