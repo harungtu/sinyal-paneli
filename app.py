@@ -1,6 +1,11 @@
 from flask import Flask, render_template, jsonify
 import requests
 
+@app.route("/robots.txt")
+def robots():
+
+    return send_from_directory("", "robots.txt")
+
 app = Flask(__name__)
 
 INTERVAL = '1d'
