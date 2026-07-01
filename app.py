@@ -28,6 +28,10 @@ BASE_PAIRS = [
     {'symbol': 'SOLUSDT', 'label': 'SOL/USDT', 'pip_size': 0.01},
     {'symbol': 'XRPUSDT', 'label': 'XRP/USDT', 'pip_size': 0.0001},
 ]
+MAJOR_4H_PAIRS = [
+    {**pair, 'label': f"{pair['label']} 4H", 'interval': '4h'}
+    for pair in BASE_PAIRS
+]
 
 TOP_VOLUME_COUNT = 5
 STABLE_BASE_ASSETS = {
@@ -183,12 +187,13 @@ def get_pairs():
         })
         known_symbols.add(symbol)
 
+    pairs.extend(MAJOR_4H_PAIRS)
     return pairs
 
 
-def stabilize_position(symbol, origin):
+def stabilize_position(position_key, origin):
     with _position_lock:
-        current = _positions.get(symbol)
+        current = _positions.get(position_key)
         same_position = (
             current
             and current['signal'] == origin['signal']
@@ -201,15 +206,15 @@ def stabilize_position(symbol, origin):
                 'since': origin['since'],
                 'entry': origin['entry'],
             }
-            _positions[symbol] = current
+            _positions[position_key] = current
 
         return current
 
 
-def fetch_pair_data(symbol, label, pip_size):
+def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
     r = _session.get(
         'https://api.binance.com/api/v3/klines',
-        params={'symbol': symbol, 'interval': INTERVAL, 'limit': TOTAL_CANDLES},
+        params={'symbol': symbol, 'interval': interval, 'limit': TOTAL_CANDLES},
         timeout=10,
     )
     r.raise_for_status()
@@ -220,7 +225,8 @@ def fetch_pair_data(symbol, label, pip_size):
         raise ValueError('Yetersiz geçmiş veri')
 
     sig = origin['signal']
-    position = stabilize_position(symbol, origin)
+    position_key = f'{symbol}:{interval}'
+    position = stabilize_position(position_key, origin)
     entry = position['entry']
     price = origin['price']
     sma = origin['sma']
@@ -237,6 +243,7 @@ def fetch_pair_data(symbol, label, pip_size):
     return {
         'symbol': symbol,
         'label': label,
+        'interval': interval,
         'price': price,
         'sma': sma,
         'signal': sig,
@@ -256,7 +263,7 @@ def _fetch_all():
     try:
         pairs = get_pairs()
     except requests.RequestException as e:
-        pairs = list(BASE_PAIRS)
+        pairs = list(BASE_PAIRS) + list(MAJOR_4H_PAIRS)
         errors.append({
             'symbol': 'TOP_VOLUME',
             'label': 'Hacim listesi',
@@ -264,7 +271,16 @@ def _fetch_all():
         })
 
     with ThreadPoolExecutor(max_workers=min(10,len(pairs))) as ex:
-        futs=[ex.submit(fetch_pair_data,p['symbol'],p['label'],p['pip_size']) for p in pairs]
+        futs=[
+            ex.submit(
+                fetch_pair_data,
+                p['symbol'],
+                p['label'],
+                p['pip_size'],
+                p.get('interval', INTERVAL),
+            )
+            for p in pairs
+        ]
         for f,p in zip(futs,pairs):
             try:
                 results.append(f.result())
