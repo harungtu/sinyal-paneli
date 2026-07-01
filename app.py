@@ -1,23 +1,16 @@
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, send_from_directory
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import time
+
+app = Flask(__name__)
+
 _session=requests.Session()
 _cache={'ts':0,'data':None}
 _lock=Lock()
-
-@app.route("/sitemap.xml")
-def sitemap():
-
-    return send_from_directory("", "sitemap.xml")
-
-@app.route("/robots.txt")
-def robots():
-
-    return send_from_directory("", "robots.txt")
-
-app = Flask(__name__)
+_position_lock=Lock()
+_positions={}
 
 INTERVAL = '1d'
 SMA_PERIOD = 50
@@ -28,13 +21,30 @@ SMA_PERIOD = 50
 LOOKBACK_FOR_CROSSOVER = 150
 TOTAL_CANDLES = SMA_PERIOD + LOOKBACK_FOR_CROSSOVER
 
-PAIRS = [
+BASE_PAIRS = [
     {'symbol': 'BTCUSDT', 'label': 'BTC/USDT', 'pip_size': 1},
     {'symbol': 'PAXGUSDT', 'label': 'XAU/USD (PAXG)', 'pip_size': 0.01},
     {'symbol': 'ETHUSDT', 'label': 'ETH/USDT', 'pip_size': 0.1},
     {'symbol': 'SOLUSDT', 'label': 'SOL/USDT', 'pip_size': 0.01},
     {'symbol': 'XRPUSDT', 'label': 'XRP/USDT', 'pip_size': 0.0001},
 ]
+
+TOP_VOLUME_COUNT = 5
+STABLE_BASE_ASSETS = {
+    'USDC', 'FDUSD', 'TUSD', 'USDP', 'DAI', 'BUSD', 'EUR', 'TRY', 'BRL',
+    'GBP', 'AUD', 'BIDR', 'AEUR', 'EURI', 'USTC', 'USD1', 'XUSD', 'PYUSD',
+}
+LEVERAGED_SUFFIXES = ('UP', 'DOWN', 'BULL', 'BEAR')
+
+
+@app.route("/sitemap.xml")
+def sitemap():
+    return send_from_directory("", "sitemap.xml")
+
+
+@app.route("/robots.txt")
+def robots():
+    return send_from_directory("", "robots.txt")
 
 
 def find_signal_origin(klines):
@@ -96,8 +106,104 @@ def find_signal_origin(klines):
         'sma': sma_now,
         'price': price_now,
         'complete': complete,
+        'origin_is_current_candle': origin_idx == len(days_with_direction) - 1,
         'pl_history': pl_history,
     }
+
+
+def _is_tradeable_usdt_crypto(symbol_info):
+    symbol = symbol_info.get('symbol', '')
+    base_asset = symbol_info.get('baseAsset', '')
+
+    if symbol_info.get('status') != 'TRADING':
+        return False
+    if symbol_info.get('quoteAsset') != 'USDT':
+        return False
+    if base_asset in STABLE_BASE_ASSETS:
+        return False
+    if base_asset.endswith(LEVERAGED_SUFFIXES):
+        return False
+    return symbol.endswith('USDT')
+
+
+def _tick_size(symbol_info):
+    for flt in symbol_info.get('filters', []):
+        if flt.get('filterType') == 'PRICE_FILTER':
+            return float(flt.get('tickSize', 0)) or 0.01
+    return 0.01
+
+
+def _label_for(symbol_info):
+    return f"{symbol_info.get('baseAsset')}/{symbol_info.get('quoteAsset')}"
+
+
+def get_pairs():
+    pairs = list(BASE_PAIRS)
+    known_symbols = {p['symbol'] for p in pairs}
+
+    exchange_info = _session.get(
+        'https://api.binance.com/api/v3/exchangeInfo',
+        timeout=10,
+    )
+    exchange_info.raise_for_status()
+    symbols_by_name = {
+        item['symbol']: item
+        for item in exchange_info.json().get('symbols', [])
+        if _is_tradeable_usdt_crypto(item)
+    }
+
+    tickers = _session.get(
+        'https://api.binance.com/api/v3/ticker/24hr',
+        timeout=10,
+    )
+    tickers.raise_for_status()
+
+    ranked = sorted(
+        (
+            ticker for ticker in tickers.json()
+            if ticker.get('symbol') in symbols_by_name
+        ),
+        key=lambda ticker: float(ticker.get('quoteVolume', 0)),
+        reverse=True,
+    )
+
+    for ticker in ranked:
+        if len(pairs) >= len(BASE_PAIRS) + TOP_VOLUME_COUNT:
+            break
+
+        symbol = ticker['symbol']
+        if symbol in known_symbols:
+            continue
+
+        symbol_info = symbols_by_name[symbol]
+        pairs.append({
+            'symbol': symbol,
+            'label': _label_for(symbol_info),
+            'pip_size': _tick_size(symbol_info),
+        })
+        known_symbols.add(symbol)
+
+    return pairs
+
+
+def stabilize_position(symbol, origin):
+    with _position_lock:
+        current = _positions.get(symbol)
+        same_position = (
+            current
+            and current['signal'] == origin['signal']
+            and current['since'] == origin['since']
+        )
+
+        if not same_position:
+            current = {
+                'signal': origin['signal'],
+                'since': origin['since'],
+                'entry': origin['entry'],
+            }
+            _positions[symbol] = current
+
+        return current
 
 
 def fetch_pair_data(symbol, label, pip_size):
@@ -114,7 +220,8 @@ def fetch_pair_data(symbol, label, pip_size):
         raise ValueError('Yetersiz geçmiş veri')
 
     sig = origin['signal']
-    entry = origin['entry']
+    position = stabilize_position(symbol, origin)
+    entry = position['entry']
     price = origin['price']
     sma = origin['sma']
 
@@ -134,7 +241,7 @@ def fetch_pair_data(symbol, label, pip_size):
         'sma': sma,
         'signal': sig,
         'entry': entry,
-        'since': origin['since'] / 1000,  # ms -> saniye (frontend saniye bekliyor)
+        'since': position['since'] / 1000,  # ms -> saniye (frontend saniye bekliyor)
         'since_is_estimate': not origin['complete'],
         'pl': pl,
         'pips': pips,
@@ -146,15 +253,25 @@ def fetch_pair_data(symbol, label, pip_size):
 def _fetch_all():
     results = []
     errors = []
-    with ThreadPoolExecutor(max_workers=min(5,len(PAIRS))) as ex:
-        futs=[ex.submit(fetch_pair_data,p['symbol'],p['label'],p['pip_size']) for p in PAIRS]
-        for f,p in zip(futs,PAIRS):
+    try:
+        pairs = get_pairs()
+    except requests.RequestException as e:
+        pairs = list(BASE_PAIRS)
+        errors.append({
+            'symbol': 'TOP_VOLUME',
+            'label': 'Hacim listesi',
+            'error': f'Populer pariteler alinamadi: {e}',
+        })
+
+    with ThreadPoolExecutor(max_workers=min(10,len(pairs))) as ex:
+        futs=[ex.submit(fetch_pair_data,p['symbol'],p['label'],p['pip_size']) for p in pairs]
+        for f,p in zip(futs,pairs):
             try:
                 results.append(f.result())
-        except requests.RequestException as e:
-            errors.append({'symbol': p['symbol'], 'label': p['label'], 'error': f'Veriye ulasilamadi: {e}'})
-        except Exception as e:
-            errors.append({'symbol': p['symbol'], 'label': p['label'], 'error': f'Beklenmeyen hata: {e}'})
+            except requests.RequestException as e:
+                errors.append({'symbol': p['symbol'], 'label': p['label'], 'error': f'Veriye ulasilamadi: {e}'})
+            except Exception as e:
+                errors.append({'symbol': p['symbol'], 'label': p['label'], 'error': f'Beklenmeyen hata: {e}'})
     return {'pairs': results, 'errors': errors}
 
 
