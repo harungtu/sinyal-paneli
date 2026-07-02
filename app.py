@@ -2,6 +2,8 @@ from flask import Flask, render_template, jsonify, send_from_directory
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
+import json
+import os
 import time
 
 app = Flask(__name__)
@@ -10,7 +12,12 @@ _session=requests.Session()
 _cache={'ts':0,'data':None}
 _lock=Lock()
 _position_lock=Lock()
+_signal_state_lock=Lock()
 _positions={}
+SIGNAL_STATE_FILE = 'signals_state.json'
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
+TELEGRAM_ALERTS_ENABLED = os.environ.get('TELEGRAM_ALERTS_ENABLED', 'true').lower() == 'true'
 
 INTERVAL = '1d'
 SMA_PERIOD = 50
@@ -211,6 +218,87 @@ def stabilize_position(position_key, origin):
         return current
 
 
+def load_signal_state():
+    if not os.path.exists(SIGNAL_STATE_FILE):
+        return {}
+
+    try:
+        with open(SIGNAL_STATE_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_signal_state(state):
+    with open(SIGNAL_STATE_FILE, 'w', encoding='utf-8') as f:
+        json.dump(state, f, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def signal_state_key(pair):
+    return f"{pair['symbol']}:{pair.get('interval', INTERVAL)}"
+
+
+def format_telegram_signal(pair):
+    direction_icon = '[BUY]' if pair['signal'] == 'BUY' else '[SELL]'
+    interval = pair.get('interval', INTERVAL).upper()
+    entry = f"{pair['entry']:,.8f}".rstrip('0').rstrip('.')
+    price = f"{pair['price']:,.8f}".rstrip('0').rstrip('.')
+    sma = f"{pair['sma']:,.8f}".rstrip('0').rstrip('.')
+    pl = f"{pair['pl']:+.2f}%"
+
+    return (
+        f"{direction_icon} New signal\n"
+        f"{pair['label']} ({interval})\n"
+        f"Signal: {pair['signal']}\n"
+        f"Entry: {entry}\n"
+        f"Price: {price}\n"
+        f"MA50: {sma}\n"
+        f"P/L: {pl}\n\n"
+        "Not financial advice."
+    )
+
+
+def send_telegram_message(text):
+    if not (TELEGRAM_ALERTS_ENABLED and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
+        return
+
+    r = _session.post(
+        f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage',
+        json={
+            'chat_id': TELEGRAM_CHAT_ID,
+            'text': text,
+            'disable_web_page_preview': True,
+        },
+        timeout=10,
+    )
+    r.raise_for_status()
+
+
+def notify_signal_changes(pairs):
+    with _signal_state_lock:
+        state = load_signal_state()
+        next_state = dict(state)
+        messages = []
+
+        for pair in pairs:
+            key = signal_state_key(pair)
+            current = {
+                'signal': pair['signal'],
+                'since': pair['since'],
+            }
+            previous = state.get(key)
+
+            if previous and previous != current:
+                messages.append(format_telegram_signal(pair))
+
+            next_state[key] = current
+
+        save_signal_state(next_state)
+
+    for message in messages:
+        send_telegram_message(message)
+
+
 def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
     r = _session.get(
         'https://api.binance.com/api/v3/klines',
@@ -288,6 +376,14 @@ def _fetch_all():
                 errors.append({'symbol': p['symbol'], 'label': p['label'], 'error': f'Veriye ulasilamadi: {e}'})
             except Exception as e:
                 errors.append({'symbol': p['symbol'], 'label': p['label'], 'error': f'Beklenmeyen hata: {e}'})
+
+    try:
+        notify_signal_changes(results)
+    except requests.RequestException as e:
+        errors.append({'symbol': 'TELEGRAM', 'label': 'Telegram', 'error': f'Mesaj gonderilemedi: {e}'})
+    except Exception as e:
+        errors.append({'symbol': 'TELEGRAM', 'label': 'Telegram', 'error': f'Bildirim hatasi: {e}'})
+
     return {'pairs': results, 'errors': errors}
 
 
