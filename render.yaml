@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: sinyal-paneli
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 1 --threads 2 --timeout 120
+    autoDeploy: true
+    plan: free

@@ -1,7 +1,7 @@
 from flask import Flask, render_template, jsonify, send_from_directory
 import requests
 from concurrent.futures import ThreadPoolExecutor
-from threading import Lock
+from threading import Lock, Thread
 import json
 import os
 import time
@@ -11,13 +11,16 @@ app = Flask(__name__)
 _session=requests.Session()
 _cache={'ts':0,'data':None}
 _lock=Lock()
+_refresh_lock=Lock()
 _position_lock=Lock()
 _signal_state_lock=Lock()
 _positions={}
+_background_watcher_started = False
 SIGNAL_STATE_FILE = 'signals_state.json'
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 TELEGRAM_ALERTS_ENABLED = os.environ.get('TELEGRAM_ALERTS_ENABLED', 'true').lower() == 'true'
+BACKGROUND_REFRESH_SECONDS = int(os.environ.get('BACKGROUND_REFRESH_SECONDS', '60'))
 
 INTERVAL = '1d'
 SMA_PERIOD = 50
@@ -399,10 +402,42 @@ def fetch_all():
     with _lock:
         if _cache['data'] and time.time()-_cache['ts']<60:
             return _cache['data']
-    data=_fetch_all()
-    with _lock:
-        _cache['data']=data;_cache['ts']=time.time()
-    return data
+
+    with _refresh_lock:
+        with _lock:
+            if _cache['data'] and time.time()-_cache['ts']<60:
+                return _cache['data']
+
+        data=_fetch_all()
+        with _lock:
+            _cache['data']=data;_cache['ts']=time.time()
+        return data
+
+
+def background_signal_watcher():
+    while True:
+        try:
+            fetch_all()
+        except Exception:
+            pass
+        time.sleep(BACKGROUND_REFRESH_SECONDS)
+
+
+def start_background_signal_watcher():
+    global _background_watcher_started
+
+    if _background_watcher_started:
+        return
+
+    if not TELEGRAM_ALERTS_ENABLED:
+        return
+
+    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not app.debug or os.environ.get('RENDER') == 'true':
+        Thread(target=background_signal_watcher, daemon=True).start()
+        _background_watcher_started = True
+
+
+start_background_signal_watcher()
 
 @app.route('/api')
 def api():
@@ -410,4 +445,5 @@ def api():
 
 
 if __name__ == '__main__':
+    start_background_signal_watcher()
     app.run(debug=True)
