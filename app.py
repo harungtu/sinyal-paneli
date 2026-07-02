@@ -15,6 +15,8 @@ _refresh_lock=Lock()
 _position_lock=Lock()
 _signal_state_lock=Lock()
 _positions={}
+_last_good_pairs = []
+_last_good_errors = []
 _background_watcher_started = False
 SIGNAL_STATE_FILE = 'signals_state.json'
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
@@ -51,6 +53,7 @@ FAST_SIGNAL_PAIRS = [
     {'symbol': 'ETHUSDT', 'label': 'ETH/USDT 5M', 'pip_size': 0.1, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_sma'},
     {'symbol': 'XRPUSDT', 'label': 'XRP/USDT 5M', 'pip_size': 0.0001, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_sma'},
 ]
+ACTIVE_PAIRS = FAST_SIGNAL_PAIRS
 
 TOP_VOLUME_COUNT = 5
 STABLE_BASE_ASSETS = {
@@ -214,55 +217,7 @@ def _label_for(symbol_info):
 
 
 def get_pairs():
-    pairs = list(BASE_PAIRS)
-    known_keys = {(p['symbol'], p.get('interval', INTERVAL)) for p in pairs}
-
-    exchange_info = _session.get(
-        'https://api.binance.com/api/v3/exchangeInfo',
-        timeout=10,
-    )
-    exchange_info.raise_for_status()
-    symbols_by_name = {
-        item['symbol']: item
-        for item in exchange_info.json().get('symbols', [])
-        if _is_tradeable_usdt_crypto(item)
-    }
-
-    tickers = _session.get(
-        'https://api.binance.com/api/v3/ticker/24hr',
-        timeout=10,
-    )
-    tickers.raise_for_status()
-
-    ranked = sorted(
-        (
-            ticker for ticker in tickers.json()
-            if ticker.get('symbol') in symbols_by_name
-        ),
-        key=lambda ticker: float(ticker.get('quoteVolume', 0)),
-        reverse=True,
-    )
-
-    for ticker in ranked:
-        if len([p for p in pairs if p.get('interval', INTERVAL) == INTERVAL]) >= len(BASE_PAIRS) + TOP_VOLUME_COUNT:
-            break
-
-        symbol = ticker['symbol']
-        pair_key = (symbol, INTERVAL)
-        if pair_key in known_keys:
-            continue
-
-        symbol_info = symbols_by_name[symbol]
-        pairs.append({
-            'symbol': symbol,
-            'label': _label_for(symbol_info),
-            'pip_size': _tick_size(symbol_info),
-        })
-        known_keys.add(pair_key)
-
-    pairs.extend(MAJOR_4H_PAIRS)
-    pairs.extend(FAST_SIGNAL_PAIRS)
-    return pairs
+    return list(ACTIVE_PAIRS)
 
 
 def stabilize_position(position_key, origin):
@@ -425,15 +380,7 @@ def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
 def _fetch_all():
     results = []
     errors = []
-    try:
-        pairs = get_pairs()
-    except requests.RequestException as e:
-        pairs = list(BASE_PAIRS) + list(MAJOR_4H_PAIRS)
-        errors.append({
-            'symbol': 'TOP_VOLUME',
-            'label': 'Hacim listesi',
-            'error': f'Populer pariteler alinamadi: {e}',
-        })
+    pairs = get_pairs()
 
     with ThreadPoolExecutor(max_workers=min(10,len(pairs))) as ex:
         futs=[
@@ -464,7 +411,20 @@ def _fetch_all():
     except Exception as e:
         errors.append({'symbol': 'TELEGRAM', 'label': 'Telegram', 'error': f'Bildirim hatasi: {e}'})
 
+    if errors and not results:
+        cached = get_cached_data()
+        if cached['pairs']:
+            return cached
+
     return {'pairs': results, 'errors': errors}
+
+
+def get_cached_data():
+    with _lock:
+        return {
+            'pairs': list(_last_good_pairs),
+            'errors': list(_last_good_errors),
+        }
 
 
 @app.route('/')
@@ -473,6 +433,8 @@ def index():
 
 
 def fetch_all():
+    global _last_good_pairs, _last_good_errors
+
     with _lock:
         if _cache['data'] and time.time()-_cache['ts']<60:
             return _cache['data']
@@ -485,6 +447,8 @@ def fetch_all():
         data=_fetch_all()
         with _lock:
             _cache['data']=data;_cache['ts']=time.time()
+            _last_good_pairs = list(data.get('pairs', []))
+            _last_good_errors = list(data.get('errors', []))
         return data
 
 
