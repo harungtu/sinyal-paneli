@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify, send_from_directory
+from flask import Flask, render_template, jsonify, send_from_directory, request
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock, Thread
@@ -22,6 +22,7 @@ SIGNAL_STATE_FILE = 'signals_state.json'
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 TELEGRAM_ALERTS_ENABLED = os.environ.get('TELEGRAM_ALERTS_ENABLED', 'true').lower() == 'true'
+TELEGRAM_TEST_KEY = os.environ.get('TELEGRAM_TEST_KEY')
 BACKGROUND_REFRESH_SECONDS = int(os.environ.get('BACKGROUND_REFRESH_SECONDS', '60'))
 
 INTERVAL = '1d'
@@ -296,6 +297,12 @@ def send_telegram_message(text):
     r.raise_for_status()
 
 
+def send_test_telegram_message():
+    send_telegram_message(
+        "[TEST] Telegram kanal baglantisi calisiyor. Bu mesaj test icin gonderildi."
+    )
+
+
 def notify_signal_changes(pairs):
     with _signal_state_lock:
         state = load_signal_state()
@@ -480,6 +487,20 @@ start_background_signal_watcher()
 @app.route('/api')
 def api():
     return jsonify(fetch_all())
+
+
+@app.route('/api/test-telegram')
+def api_test_telegram():
+    provided_key = request.args.get('key', '')
+
+    if TELEGRAM_TEST_KEY and provided_key != TELEGRAM_TEST_KEY:
+        return jsonify({'ok': False, 'error': 'Invalid key'}), 403
+
+    try:
+        send_test_telegram_message()
+        return jsonify({'ok': True, 'message': 'Test mesajı gönderildi'})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 if __name__ == '__main__':
