@@ -54,7 +54,14 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
   }
 
   .intro{
+    display:flex;
+    justify-content:space-between;
+    gap:18px;
+    align-items:flex-start;
     margin-bottom:28px;
+  }
+  .intro-copy{
+    min-width:0;
   }
   .intro h1{
     font-family:var(--mono);
@@ -70,6 +77,30 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
     color:var(--text-dim);
     font-size:12px;
     line-height:1.55;
+  }
+  .telegram-button{
+    flex:0 0 auto;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-height:34px;
+    padding:0 13px;
+    border:1px solid rgba(31,203,122,0.35);
+    border-radius:6px;
+    background:rgba(31,203,122,0.09);
+    color:var(--buy);
+    font-family:var(--mono);
+    font-size:11px;
+    font-weight:700;
+    letter-spacing:0.04em;
+    text-decoration:none;
+    text-transform:uppercase;
+    white-space:nowrap;
+    transition:background 0.15s ease, border-color 0.15s ease;
+  }
+  .telegram-button:hover{
+    background:rgba(31,203,122,0.15);
+    border-color:rgba(31,203,122,0.65);
   }
 
   .header-row{
@@ -194,7 +225,48 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
     padding:18px;
   }
 
+  .pagination{
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    gap:7px;
+    min-height:34px;
+    margin-top:14px;
+  }
+  .page-button{
+    min-width:30px;
+    height:30px;
+    border:1px solid var(--panel-line);
+    border-radius:6px;
+    background:var(--panel);
+    color:var(--text-dim);
+    font-family:var(--mono);
+    font-size:12px;
+    cursor:pointer;
+    transition:color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+  .page-button:hover{
+    color:var(--text);
+    border-color:#2E3741;
+  }
+  .page-button.active{
+    color:var(--text);
+    border-color:rgba(31,203,122,0.55);
+    background:rgba(31,203,122,0.1);
+  }
+  .page-button:disabled{
+    cursor:default;
+    opacity:0.35;
+  }
+
   @media (max-width: 640px){
+    .intro{
+      display:block;
+    }
+    .telegram-button{
+      margin-top:14px;
+      width:100%;
+    }
     table, thead, tbody, th, td, tr{display:block;}
     thead{display:none;}
     tbody tr{
@@ -227,8 +299,11 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
 
 <div class="wrap">
   <section class="intro">
-    <h1>Free Live Trading Signals</h1>
-    <p>Live BTCUSD and XAUUSD buy and sell signals generated from technical indicators.</p>
+    <div class="intro-copy">
+      <h1>Free Live Trading Signals</h1>
+      <p>Live BTCUSD and XAUUSD buy and sell signals generated from technical indicators.</p>
+    </div>
+    <a class="telegram-button" id="telegramJoin" href="https://t.me/" target="_blank" rel="noopener">Join Telegram</a>
   </section>
 
   <div class="header-row">
@@ -254,11 +329,15 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
     </tbody>
   </table>
 
+  <div class="pagination" id="pagination"></div>
+
   <div class="footer-note">5 saniyede bir güncellenir · Binance Spot API · Bu sayfa yatırım tavsiyesi değildir</div>
 </div>
 
 <script>
 const REFRESH_MS = 5000;
+const PAGE_SIZE = 8;
+const TELEGRAM_JOIN_URL = 'https://t.me/';
 
 function fmtNum(n, decimals=2){
   if(n === null || n === undefined) return '—';
@@ -344,6 +423,8 @@ let lastErrors = [];
 let sortKey = null;
 let sortDir = 1; // 1 = büyükten küçüğe (yüksekten düşüğe), -1 = tersi
 
+let currentPage = 1;
+
 const SORT_GETTERS = {
   label: p => (p.label || '').toLowerCase(),
   signal: p => p.signal === 'BUY' ? 1 : 0,
@@ -380,12 +461,44 @@ function updateSortHeaders(){
   });
 }
 
+function renderPagination(totalItems){
+  const pagination = document.getElementById('pagination');
+  const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+
+  if(totalPages <= 1){
+    pagination.innerHTML = '';
+    return;
+  }
+
+  let html = `<button class="page-button" data-page="${currentPage - 1}" ${currentPage === 1 ? 'disabled' : ''}>&lt;</button>`;
+  for(let page = 1; page <= totalPages; page++){
+    html += `<button class="page-button ${page === currentPage ? 'active' : ''}" data-page="${page}">${page}</button>`;
+  }
+  html += `<button class="page-button" data-page="${currentPage + 1}" ${currentPage === totalPages ? 'disabled' : ''}>&gt;</button>`;
+
+  pagination.innerHTML = html;
+  pagination.querySelectorAll('.page-button').forEach(button => {
+    button.addEventListener('click', () => {
+      if(button.disabled) return;
+      currentPage = Number(button.dataset.page);
+      renderTable();
+    });
+  });
+}
+
 function renderTable(){
   const tbody = document.getElementById('tableBody');
   let html = '';
+  const sortedPairs = applySort(lastPairs);
+  const totalPages = Math.max(1, Math.ceil(sortedPairs.length / PAGE_SIZE));
+  currentPage = Math.min(Math.max(1, currentPage), totalPages);
+  const pageStart = (currentPage - 1) * PAGE_SIZE;
+  const pagePairs = sortedPairs.slice(pageStart, pageStart + PAGE_SIZE);
 
-  applySort(lastPairs).forEach(p => { html += renderRow(p); });
-  lastErrors.forEach(e => { html += renderErrorRow(e); });
+  pagePairs.forEach(p => { html += renderRow(p); });
+  if(currentPage === totalPages){
+    lastErrors.forEach(e => { html += renderErrorRow(e); });
+  }
 
   if(!html){
     html = `<tr><td colspan="8" style="text-align:center; color:var(--text-dim); font-family:var(--mono); font-size:13px; padding:24px;">Veri yok</td></tr>`;
@@ -393,6 +506,7 @@ function renderTable(){
 
   tbody.innerHTML = html;
   updateSortHeaders();
+  renderPagination(sortedPairs.length);
 }
 
 document.querySelectorAll('th.sortable').forEach(th => {
@@ -404,9 +518,12 @@ document.querySelectorAll('th.sortable').forEach(th => {
       sortKey = key;
       sortDir = 1;
     }
+    currentPage = 1;
     renderTable();
   });
 });
+
+document.getElementById('telegramJoin').href = TELEGRAM_JOIN_URL;
 
 async function refresh(){
   try{
