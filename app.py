@@ -246,20 +246,18 @@ def signal_state_key(pair):
 
 def format_telegram_signal(pair):
     direction_icon = '[BUY]' if pair['signal'] == 'BUY' else '[SELL]'
-    interval = pair.get('interval', INTERVAL).upper()
+    label = pair.get('label', pair.get('symbol', ''))
+    for suffix in (' 5M', ' 4H', ' 1D'):
+        if label.endswith(suffix):
+            label = label[:-len(suffix)]
+            break
     entry = f"{pair['entry']:,.8f}".rstrip('0').rstrip('.')
-    price = f"{pair['price']:,.8f}".rstrip('0').rstrip('.')
-    sma = f"{pair['sma']:,.8f}".rstrip('0').rstrip('.')
-    pl = f"{pair['pl']:+.2f}%"
 
     return (
         f"{direction_icon} New signal\n"
-        f"{pair['label']} ({interval})\n"
+        f"{label}\n"
         f"Signal: {pair['signal']}\n"
         f"Entry: {entry}\n"
-        f"Price: {price}\n"
-        f"MA50: {sma}\n"
-        f"P/L: {pl}\n\n"
         "Not financial advice."
     )
 
