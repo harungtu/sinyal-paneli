@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify, send_from_directory, request
+from flask import Flask, render_template, jsonify, send_from_directory
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock, Thread
@@ -22,15 +22,10 @@ SIGNAL_STATE_FILE = 'signals_state.json'
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 TELEGRAM_ALERTS_ENABLED = os.environ.get('TELEGRAM_ALERTS_ENABLED', 'true').lower() == 'true'
-TELEGRAM_TEST_KEY = os.environ.get('TELEGRAM_TEST_KEY')
 BACKGROUND_REFRESH_SECONDS = int(os.environ.get('BACKGROUND_REFRESH_SECONDS', '60'))
 
 INTERVAL = '1d'
 SMA_PERIOD = 50
-FAST_SIGNAL_INTERVAL = '5m'
-FAST_SIGNAL_PERIOD = 3
-FAST_SIGNAL_LOOKBACK = 40
-FAST_SIGNAL_TOTAL_CANDLES = FAST_SIGNAL_PERIOD + FAST_SIGNAL_LOOKBACK
 
 # SMA50 hesaplamak için 50 gün, ek olarak kesişim anını geriye dönük bulabilmek
 # için yeterince fazladan gün çekiyoruz. Pencere içinde kesişim bulunamazsa
@@ -49,17 +44,6 @@ MAJOR_4H_PAIRS = [
     {**pair, 'label': f"{pair['label']} 4H", 'interval': '4h'}
     for pair in BASE_PAIRS
 ]
-FAST_SIGNAL_PAIRS = [
-    {'symbol': 'BTCUSDT', 'label': 'BTC/USDT 5M', 'pip_size': 1, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
-    {'symbol': 'ETHUSDT', 'label': 'ETH/USDT 5M', 'pip_size': 0.1, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
-    {'symbol': 'XRPUSDT', 'label': 'XRP/USDT 5M', 'pip_size': 0.0001, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
-    {'symbol': 'SOLUSDT', 'label': 'SOL/USDT 5M', 'pip_size': 0.01, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
-    {'symbol': 'BNBUSDT', 'label': 'BNB/USDT 5M', 'pip_size': 0.1, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
-    {'symbol': 'DOGEUSDT', 'label': 'DOGE/USDT 5M', 'pip_size': 0.0001, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
-    {'symbol': 'ADAUSDT', 'label': 'ADA/USDT 5M', 'pip_size': 0.0001, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
-    {'symbol': 'AVAXUSDT', 'label': 'AVAX/USDT 5M', 'pip_size': 0.01, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
-]
-ACTIVE_PAIRS = FAST_SIGNAL_PAIRS
 
 TOP_VOLUME_COUNT = 5
 STABLE_BASE_ASSETS = {
@@ -143,57 +127,6 @@ def find_signal_origin(klines):
     }
 
 
-def simple_average(values):
-    return sum(values) / len(values)
-
-
-def find_fast_signal_origin(klines):
-    closes = [float(k[4]) for k in klines]
-    open_times = [k[0] for k in klines]
-
-    days_with_direction = []
-    for i in range(FAST_SIGNAL_PERIOD, len(closes)):
-        window = closes[i - FAST_SIGNAL_PERIOD:i]
-        sma_i = simple_average(window)
-        price_i = closes[i]
-        direction_i = price_i > sma_i
-        days_with_direction.append((open_times[i], price_i, direction_i, sma_i))
-
-    if not days_with_direction:
-        return None
-
-    current_signal_buy = days_with_direction[-1][2]
-    sma_now = days_with_direction[-1][3]
-    price_now = days_with_direction[-1][1]
-
-    origin_idx = 0
-    complete = False
-    for idx in range(len(days_with_direction) - 1, 0, -1):
-        if days_with_direction[idx][2] != days_with_direction[idx - 1][2]:
-            origin_idx = idx
-            complete = True
-            break
-
-    origin_open_time, origin_price, _, _ = days_with_direction[origin_idx]
-
-    direction_sign = 1 if current_signal_buy else -1
-    pl_history = [
-        (day_close - origin_price) / origin_price * 100 * direction_sign
-        for (_, day_close, _, _) in days_with_direction[origin_idx:]
-    ]
-
-    return {
-        'signal': 'BUY' if current_signal_buy else 'SELL',
-        'entry': origin_price,
-        'since': origin_open_time,
-        'sma': sma_now,
-        'price': price_now,
-        'complete': complete,
-        'origin_is_current_candle': origin_idx == len(days_with_direction) - 1,
-        'pl_history': pl_history,
-    }
-
-
 def _is_tradeable_usdt_crypto(symbol_info):
     symbol = symbol_info.get('symbol', '')
     base_asset = symbol_info.get('baseAsset', '')
@@ -221,7 +154,54 @@ def _label_for(symbol_info):
 
 
 def get_pairs():
-    return list(ACTIVE_PAIRS)
+    pairs = list(BASE_PAIRS)
+    known_keys = {(p['symbol'], p.get('interval', INTERVAL)) for p in pairs}
+
+    exchange_info = _session.get(
+        'https://api.binance.com/api/v3/exchangeInfo',
+        timeout=10,
+    )
+    exchange_info.raise_for_status()
+    symbols_by_name = {
+        item['symbol']: item
+        for item in exchange_info.json().get('symbols', [])
+        if _is_tradeable_usdt_crypto(item)
+    }
+
+    tickers = _session.get(
+        'https://api.binance.com/api/v3/ticker/24hr',
+        timeout=10,
+    )
+    tickers.raise_for_status()
+
+    ranked = sorted(
+        (
+            ticker for ticker in tickers.json()
+            if ticker.get('symbol') in symbols_by_name
+        ),
+        key=lambda ticker: float(ticker.get('quoteVolume', 0)),
+        reverse=True,
+    )
+
+    for ticker in ranked:
+        if len([p for p in pairs if p.get('interval', INTERVAL) == INTERVAL]) >= len(BASE_PAIRS) + TOP_VOLUME_COUNT:
+            break
+
+        symbol = ticker['symbol']
+        pair_key = (symbol, INTERVAL)
+        if pair_key in known_keys:
+            continue
+
+        symbol_info = symbols_by_name[symbol]
+        pairs.append({
+            'symbol': symbol,
+            'label': _label_for(symbol_info),
+            'pip_size': _tick_size(symbol_info),
+        })
+        known_keys.add(pair_key)
+
+    pairs.extend(MAJOR_4H_PAIRS)
+    return pairs
 
 
 def stabilize_position(position_key, origin):
@@ -300,12 +280,6 @@ def send_telegram_message(text):
     r.raise_for_status()
 
 
-def send_test_telegram_message():
-    send_telegram_message(
-        "[TEST] Telegram kanal baglantisi calisiyor. Bu mesaj test icin gonderildi."
-    )
-
-
 def notify_signal_changes(pairs):
     with _signal_state_lock:
         state = load_signal_state()
@@ -332,23 +306,15 @@ def notify_signal_changes(pairs):
 
 
 def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
-    signal_mode = 'standard'
-
-    for pair in FAST_SIGNAL_PAIRS:
-        if pair['symbol'] == symbol and pair.get('interval') == interval:
-            signal_mode = pair.get('signal_mode', 'standard')
-            break
-
-    limit = FAST_SIGNAL_TOTAL_CANDLES if signal_mode == 'fast_sma' else TOTAL_CANDLES
     r = _session.get(
         'https://api.binance.com/api/v3/klines',
-        params={'symbol': symbol, 'interval': interval, 'limit': limit},
+        params={'symbol': symbol, 'interval': interval, 'limit': TOTAL_CANDLES},
         timeout=10,
     )
     r.raise_for_status()
     raw = r.json()
 
-    origin = find_fast_signal_origin(raw) if signal_mode == 'fast_sma' else find_signal_origin(raw)
+    origin = find_signal_origin(raw)
     if origin is None:
         raise ValueError('Yetersiz geçmiş veri')
 
@@ -363,17 +329,15 @@ def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
     pl = (price - entry) / entry * 100 * direction
     pips = (price - entry) / pip_size * direction
 
-    history_window = (FAST_SIGNAL_PERIOD + 1) if signal_mode == 'fast_sma' else (SMA_PERIOD + 1)
     history = [
         {'time': k[0], 'close': float(k[4])}
-        for k in raw[-history_window:]
+        for k in raw[-(SMA_PERIOD + 1):]
     ]
 
     return {
         'symbol': symbol,
         'label': label,
         'interval': interval,
-        'signal_mode': signal_mode,
         'price': price,
         'sma': sma,
         'signal': sig,
@@ -490,20 +454,6 @@ start_background_signal_watcher()
 @app.route('/api')
 def api():
     return jsonify(fetch_all())
-
-
-@app.route('/api/test-telegram')
-def api_test_telegram():
-    provided_key = request.args.get('key', '')
-
-    if TELEGRAM_TEST_KEY and provided_key != TELEGRAM_TEST_KEY:
-        return jsonify({'ok': False, 'error': 'Invalid key'}), 403
-
-    try:
-        send_test_telegram_message()
-        return jsonify({'ok': True, 'message': 'Test mesajı gönderildi'})
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 if __name__ == '__main__':
