@@ -24,6 +24,10 @@ BACKGROUND_REFRESH_SECONDS = int(os.environ.get('BACKGROUND_REFRESH_SECONDS', '6
 
 INTERVAL = '1d'
 SMA_PERIOD = 50
+FAST_SIGNAL_INTERVAL = '5m'
+FAST_SIGNAL_PERIOD = 12
+FAST_SIGNAL_LOOKBACK = 100
+FAST_SIGNAL_TOTAL_CANDLES = FAST_SIGNAL_PERIOD + FAST_SIGNAL_LOOKBACK
 
 # SMA50 hesaplamak için 50 gün, ek olarak kesişim anını geriye dönük bulabilmek
 # için yeterince fazladan gün çekiyoruz. Pencere içinde kesişim bulunamazsa
@@ -41,6 +45,11 @@ BASE_PAIRS = [
 MAJOR_4H_PAIRS = [
     {**pair, 'label': f"{pair['label']} 4H", 'interval': '4h'}
     for pair in BASE_PAIRS
+]
+FAST_SIGNAL_PAIRS = [
+    {'symbol': 'BTCUSDT', 'label': 'BTC/USDT 5M', 'pip_size': 1, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_sma'},
+    {'symbol': 'ETHUSDT', 'label': 'ETH/USDT 5M', 'pip_size': 0.1, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_sma'},
+    {'symbol': 'XRPUSDT', 'label': 'XRP/USDT 5M', 'pip_size': 0.0001, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_sma'},
 ]
 
 TOP_VOLUME_COUNT = 5
@@ -125,6 +134,59 @@ def find_signal_origin(klines):
     }
 
 
+def weighted_average(values):
+    weights = range(1, len(values) + 1)
+    weighted_sum = sum(value * weight for value, weight in zip(values, weights))
+    return weighted_sum / sum(weights)
+
+
+def find_fast_signal_origin(klines):
+    closes = [float(k[4]) for k in klines]
+    open_times = [k[0] for k in klines]
+
+    days_with_direction = []
+    for i in range(FAST_SIGNAL_PERIOD, len(closes)):
+        window = closes[i - FAST_SIGNAL_PERIOD:i]
+        sma_i = weighted_average(window)
+        price_i = closes[i]
+        direction_i = price_i > sma_i
+        days_with_direction.append((open_times[i], price_i, direction_i, sma_i))
+
+    if not days_with_direction:
+        return None
+
+    current_signal_buy = days_with_direction[-1][2]
+    sma_now = days_with_direction[-1][3]
+    price_now = days_with_direction[-1][1]
+
+    origin_idx = 0
+    complete = False
+    for idx in range(len(days_with_direction) - 1, 0, -1):
+        if days_with_direction[idx][2] != days_with_direction[idx - 1][2]:
+            origin_idx = idx
+            complete = True
+            break
+
+    origin_open_time, origin_price, _, _ = days_with_direction[origin_idx]
+
+    direction_sign = 1 if current_signal_buy else -1
+    pl_history = [
+        (day_close - origin_price) / origin_price * 100 * direction_sign
+        for (_, day_close, _, _) in days_with_direction[origin_idx:]
+    ]
+
+    return {
+        'signal': 'BUY' if current_signal_buy else 'SELL',
+        'entry': origin_price,
+        'since': origin_open_time,
+        'sma': sma_now,
+        'price': price_now,
+        'complete': complete,
+        'origin_is_current_candle': origin_idx == len(days_with_direction) - 1,
+        'pl_history': pl_history,
+    }
+
+
 def _is_tradeable_usdt_crypto(symbol_info):
     symbol = symbol_info.get('symbol', '')
     base_asset = symbol_info.get('baseAsset', '')
@@ -153,7 +215,7 @@ def _label_for(symbol_info):
 
 def get_pairs():
     pairs = list(BASE_PAIRS)
-    known_symbols = {p['symbol'] for p in pairs}
+    known_keys = {(p['symbol'], p.get('interval', INTERVAL)) for p in pairs}
 
     exchange_info = _session.get(
         'https://api.binance.com/api/v3/exchangeInfo',
@@ -182,11 +244,12 @@ def get_pairs():
     )
 
     for ticker in ranked:
-        if len(pairs) >= len(BASE_PAIRS) + TOP_VOLUME_COUNT:
+        if len([p for p in pairs if p.get('interval', INTERVAL) == INTERVAL]) >= len(BASE_PAIRS) + TOP_VOLUME_COUNT:
             break
 
         symbol = ticker['symbol']
-        if symbol in known_symbols:
+        pair_key = (symbol, INTERVAL)
+        if pair_key in known_keys:
             continue
 
         symbol_info = symbols_by_name[symbol]
@@ -195,9 +258,10 @@ def get_pairs():
             'label': _label_for(symbol_info),
             'pip_size': _tick_size(symbol_info),
         })
-        known_symbols.add(symbol)
+        known_keys.add(pair_key)
 
     pairs.extend(MAJOR_4H_PAIRS)
+    pairs.extend(FAST_SIGNAL_PAIRS)
     return pairs
 
 
@@ -303,15 +367,23 @@ def notify_signal_changes(pairs):
 
 
 def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
+    signal_mode = 'standard'
+
+    for pair in FAST_SIGNAL_PAIRS:
+        if pair['symbol'] == symbol and pair.get('interval') == interval:
+            signal_mode = pair.get('signal_mode', 'standard')
+            break
+
+    limit = FAST_SIGNAL_TOTAL_CANDLES if signal_mode == 'fast_sma' else TOTAL_CANDLES
     r = _session.get(
         'https://api.binance.com/api/v3/klines',
-        params={'symbol': symbol, 'interval': interval, 'limit': TOTAL_CANDLES},
+        params={'symbol': symbol, 'interval': interval, 'limit': limit},
         timeout=10,
     )
     r.raise_for_status()
     raw = r.json()
 
-    origin = find_signal_origin(raw)
+    origin = find_fast_signal_origin(raw) if signal_mode == 'fast_sma' else find_signal_origin(raw)
     if origin is None:
         raise ValueError('Yetersiz geçmiş veri')
 
@@ -326,15 +398,17 @@ def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
     pl = (price - entry) / entry * 100 * direction
     pips = (price - entry) / pip_size * direction
 
+    history_window = (FAST_SIGNAL_PERIOD + 1) if signal_mode == 'fast_sma' else (SMA_PERIOD + 1)
     history = [
         {'time': k[0], 'close': float(k[4])}
-        for k in raw[-(SMA_PERIOD + 1):]
+        for k in raw[-history_window:]
     ]
 
     return {
         'symbol': symbol,
         'label': label,
         'interval': interval,
+        'signal_mode': signal_mode,
         'price': price,
         'sma': sma,
         'signal': sig,
