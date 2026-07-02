@@ -374,6 +374,9 @@ def _fetch_all():
                 results.append(f.result())
             except requests.RequestException as e:
                 errors.append({'symbol': p['symbol'], 'label': p['label'], 'error': f'Veriye ulasilamadi: {e}'})
+            except ValueError as e:
+                if str(e) != 'Yetersiz geçmiş veri':
+                    errors.append({'symbol': p['symbol'], 'label': p['label'], 'error': f'Veri hatasi: {e}'})
             except Exception as e:
                 errors.append({'symbol': p['symbol'], 'label': p['label'], 'error': f'Beklenmeyen hata: {e}'})
 
