@@ -28,8 +28,8 @@ BACKGROUND_REFRESH_SECONDS = int(os.environ.get('BACKGROUND_REFRESH_SECONDS', '6
 INTERVAL = '1d'
 SMA_PERIOD = 50
 FAST_SIGNAL_INTERVAL = '5m'
-FAST_SIGNAL_PERIOD = 12
-FAST_SIGNAL_LOOKBACK = 100
+FAST_SIGNAL_PERIOD = 3
+FAST_SIGNAL_LOOKBACK = 40
 FAST_SIGNAL_TOTAL_CANDLES = FAST_SIGNAL_PERIOD + FAST_SIGNAL_LOOKBACK
 
 # SMA50 hesaplamak için 50 gün, ek olarak kesişim anını geriye dönük bulabilmek
@@ -50,9 +50,14 @@ MAJOR_4H_PAIRS = [
     for pair in BASE_PAIRS
 ]
 FAST_SIGNAL_PAIRS = [
-    {'symbol': 'BTCUSDT', 'label': 'BTC/USDT 5M', 'pip_size': 1, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_sma'},
-    {'symbol': 'ETHUSDT', 'label': 'ETH/USDT 5M', 'pip_size': 0.1, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_sma'},
-    {'symbol': 'XRPUSDT', 'label': 'XRP/USDT 5M', 'pip_size': 0.0001, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_sma'},
+    {'symbol': 'BTCUSDT', 'label': 'BTC/USDT 5M', 'pip_size': 1, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
+    {'symbol': 'ETHUSDT', 'label': 'ETH/USDT 5M', 'pip_size': 0.1, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
+    {'symbol': 'XRPUSDT', 'label': 'XRP/USDT 5M', 'pip_size': 0.0001, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
+    {'symbol': 'SOLUSDT', 'label': 'SOL/USDT 5M', 'pip_size': 0.01, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
+    {'symbol': 'BNBUSDT', 'label': 'BNB/USDT 5M', 'pip_size': 0.1, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
+    {'symbol': 'DOGEUSDT', 'label': 'DOGE/USDT 5M', 'pip_size': 0.0001, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
+    {'symbol': 'ADAUSDT', 'label': 'ADA/USDT 5M', 'pip_size': 0.0001, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
+    {'symbol': 'AVAXUSDT', 'label': 'AVAX/USDT 5M', 'pip_size': 0.01, 'interval': FAST_SIGNAL_INTERVAL, 'signal_mode': 'fast_ma3'},
 ]
 ACTIVE_PAIRS = FAST_SIGNAL_PAIRS
 
@@ -138,10 +143,8 @@ def find_signal_origin(klines):
     }
 
 
-def weighted_average(values):
-    weights = range(1, len(values) + 1)
-    weighted_sum = sum(value * weight for value, weight in zip(values, weights))
-    return weighted_sum / sum(weights)
+def simple_average(values):
+    return sum(values) / len(values)
 
 
 def find_fast_signal_origin(klines):
@@ -151,7 +154,7 @@ def find_fast_signal_origin(klines):
     days_with_direction = []
     for i in range(FAST_SIGNAL_PERIOD, len(closes)):
         window = closes[i - FAST_SIGNAL_PERIOD:i]
-        sma_i = weighted_average(window)
+        sma_i = simple_average(window)
         price_i = closes[i]
         direction_i = price_i > sma_i
         days_with_direction.append((open_times[i], price_i, direction_i, sma_i))
