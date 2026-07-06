@@ -17,6 +17,7 @@ _signal_state_lock=Lock()
 _positions={}
 _last_good_pairs = []
 _last_good_errors = []
+_last_good_fear_greed = None
 _background_watcher_started = False
 SIGNAL_STATE_FILE = 'signals_state.json'
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
@@ -349,6 +350,26 @@ def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
     }
 
 
+def fetch_fear_greed():
+    """Alternative.me Crypto Fear & Greed Index'ten son değeri çeker."""
+    r = _session.get(
+        'https://api.alternative.me/fng/',
+        params={'limit': 1, 'format': 'json'},
+        timeout=10,
+    )
+    r.raise_for_status()
+    data = r.json().get('data') or []
+    if not data:
+        raise ValueError('Fear & Greed verisi bos')
+
+    item = data[0]
+    return {
+        'value': int(item['value']),
+        'classification': item.get('value_classification', ''),
+        'timestamp': int(item['timestamp']),
+    }
+
+
 def _fetch_all():
     results = []
     errors = []
@@ -383,12 +404,26 @@ def _fetch_all():
     except Exception as e:
         errors.append({'symbol': 'TELEGRAM', 'label': 'Telegram', 'error': f'Bildirim hatasi: {e}'})
 
+    fear_greed = None
+    try:
+        fear_greed = fetch_fear_greed()
+    except requests.RequestException as e:
+        errors.append({'symbol': 'FNG', 'label': 'Fear & Greed', 'error': f'Veriye ulasilamadi: {e}'})
+    except Exception as e:
+        errors.append({'symbol': 'FNG', 'label': 'Fear & Greed', 'error': f'Beklenmeyen hata: {e}'})
+
     if errors and not results:
         cached = get_cached_data()
         if cached['pairs']:
+            if fear_greed is None:
+                fear_greed = cached['fear_greed']
+            cached['fear_greed'] = fear_greed
             return cached
 
-    return {'pairs': results, 'errors': errors}
+    if fear_greed is None:
+        fear_greed = get_cached_data()['fear_greed']
+
+    return {'pairs': results, 'errors': errors, 'fear_greed': fear_greed}
 
 
 def get_cached_data():
@@ -396,6 +431,7 @@ def get_cached_data():
         return {
             'pairs': list(_last_good_pairs),
             'errors': list(_last_good_errors),
+            'fear_greed': _last_good_fear_greed,
         }
 
 
@@ -405,7 +441,7 @@ def index():
 
 
 def fetch_all():
-    global _last_good_pairs, _last_good_errors
+    global _last_good_pairs, _last_good_errors, _last_good_fear_greed
 
     with _lock:
         if _cache['data'] and time.time()-_cache['ts']<60:
@@ -421,6 +457,8 @@ def fetch_all():
             _cache['data']=data;_cache['ts']=time.time()
             _last_good_pairs = list(data.get('pairs', []))
             _last_good_errors = list(data.get('errors', []))
+            if data.get('fear_greed') is not None:
+                _last_good_fear_greed = data.get('fear_greed')
         return data
 
 
