@@ -103,6 +103,66 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
     border-color:rgba(31,203,122,0.65);
   }
 
+  .fng-card{
+    display:none;
+    align-items:center;
+    justify-content:space-between;
+    gap:16px;
+    background:var(--panel);
+    border:1px solid var(--panel-line);
+    border-radius:10px;
+    padding:14px 18px;
+    margin-bottom:20px;
+  }
+  .fng-label{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:0.08em;
+    text-transform:uppercase;
+    color:var(--text-dim);
+    white-space:nowrap;
+  }
+  .fng-meter{
+    position:relative;
+    flex:1;
+    height:6px;
+    border-radius:3px;
+    margin:0 4px;
+    background:linear-gradient(90deg, var(--sell), #FFB020, var(--text-dim), #8BD17C, var(--buy));
+  }
+  .fng-dot{
+    position:absolute;
+    top:50%;
+    width:10px;
+    height:10px;
+    border-radius:50%;
+    background:var(--text);
+    border:2px solid var(--bg);
+    transform:translate(-50%,-50%);
+    transition:left 0.3s ease;
+  }
+  .fng-readout{
+    display:flex;
+    align-items:baseline;
+    gap:8px;
+    white-space:nowrap;
+  }
+  .fng-value{
+    font-family:var(--mono);
+    font-size:18px;
+    font-weight:700;
+  }
+  .fng-classification{
+    font-family:var(--mono);
+    font-size:11.5px;
+    color:var(--text-dim);
+  }
+
+  @media (max-width: 640px){
+    .fng-card{flex-wrap:wrap;}
+    .fng-meter{width:100%; order:3; margin:6px 0 0;}
+  }
+
   .header-row{
     display:flex;
     justify-content:space-between;
@@ -306,6 +366,15 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
     <a class="telegram-button" id="telegramJoin" href="https://t.me/" target="_blank" rel="noopener">Join Telegram</a>
   </section>
 
+  <div class="fng-card" id="fngCard">
+    <span class="fng-label">Fear &amp; Greed</span>
+    <div class="fng-meter"><span class="fng-dot" id="fngDot" style="left:50%;"></span></div>
+    <div class="fng-readout">
+      <span class="fng-value" id="fngValue">--</span>
+      <span class="fng-classification" id="fngClass">—</span>
+    </div>
+  </div>
+
   <div class="header-row">
     <span class="title">Sinyal paneli</span>
     <span class="clock" id="clock">--:--:--</span>
@@ -321,11 +390,12 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
         <th class="num sortable" data-sort-key="price">Son Fiyat<span class="sort-arrow"></span></th>
         <th class="num sortable" data-sort-key="pl">K/Z<span class="sort-arrow"></span></th>
         <th class="num sortable" data-sort-key="pips">Pip<span class="sort-arrow"></span></th>
-        <th class="chart-col">Grafik</th>
+        <th class="chart-col">Geçmiş</th>
+        <th class="num sortable" data-sort-key="pl">Performans %<span class="sort-arrow"></span></th>
       </tr>
     </thead>
     <tbody id="tableBody">
-      <tr><td colspan="8" style="text-align:center; color:var(--text-dim); font-family:var(--mono); font-size:13px; padding:24px;">Yükleniyor…</td></tr>
+      <tr><td colspan="9" style="text-align:center; color:var(--text-dim); font-family:var(--mono); font-size:13px; padding:24px;">Yükleniyor…</td></tr>
     </tbody>
   </table>
 
@@ -409,13 +479,46 @@ function renderRow(p){
       <td class="num" data-label="Son Fiyat">${p.price ? fmtNum(p.price) : '—'}</td>
       <td class="num pl ${plClass}" data-label="K/Z">${plSign}${fmtNum(plVal)}%</td>
       <td class="num pl ${pipsClass}" data-label="Pip">${pipsSign}${fmtNum(pipsVal, 0)}</td>
-      <td class="chart-cell" data-label="Grafik">${buildSparkline(p.pl_history, isBuy)}</td>
+      <td class="chart-cell" data-label="Geçmiş">${buildSparkline(p.pl_history, isBuy)}</td>
+      <td class="num pl ${plClass}" data-label="Performans %">${plSign}${fmtNum(plVal)}%</td>
     </tr>
   `;
 }
 
+const FNG_LABELS_TR = {
+  'Extreme Fear': 'Aşırı Korku',
+  'Fear': 'Korku',
+  'Neutral': 'Nötr',
+  'Greed': 'Açgözlülük',
+  'Extreme Greed': 'Aşırı Açgözlülük',
+};
+
+function fngColor(value){
+  if(value <= 24) return 'var(--sell)';
+  if(value <= 44) return '#FFB020';
+  if(value <= 55) return 'var(--text-dim)';
+  if(value <= 75) return '#8BD17C';
+  return 'var(--buy)';
+}
+
+function renderFearGreed(fg){
+  const card = document.getElementById('fngCard');
+  if(!fg || fg.value === undefined || fg.value === null){
+    card.style.display = 'none';
+    return;
+  }
+
+  card.style.display = 'flex';
+  const color = fngColor(fg.value);
+  const valueEl = document.getElementById('fngValue');
+  valueEl.textContent = fg.value;
+  valueEl.style.color = color;
+  document.getElementById('fngClass').textContent = FNG_LABELS_TR[fg.classification] || fg.classification || '—';
+  document.getElementById('fngDot').style.left = `${Math.max(0, Math.min(100, fg.value))}%`;
+}
+
 function renderErrorRow(e){
-  return `<tr class="error-row"><td colspan="8">${e.label}: ${e.error}</td></tr>`;
+  return `<tr class="error-row"><td colspan="9">${e.label}: ${e.error}</td></tr>`;
 }
 
 let lastPairs = [];
@@ -501,7 +604,7 @@ function renderTable(){
   }
 
   if(!html){
-    html = `<tr><td colspan="8" style="text-align:center; color:var(--text-dim); font-family:var(--mono); font-size:13px; padding:24px;">Veri yok</td></tr>`;
+    html = `<tr><td colspan="9" style="text-align:center; color:var(--text-dim); font-family:var(--mono); font-size:13px; padding:24px;">Veri yok</td></tr>`;
   }
 
   tbody.innerHTML = html;
@@ -533,10 +636,11 @@ async function refresh(){
     lastPairs = data.pairs || [];
     lastErrors = data.errors || [];
 
+    renderFearGreed(data.fear_greed);
     renderTable();
   } catch(e){
     document.getElementById('tableBody').innerHTML =
-      `<tr class="error-row"><td colspan="8">Sunucuya bağlanılamadı: ${e.message}</td></tr>`;
+      `<tr class="error-row"><td colspan="9">Sunucuya bağlanılamadı: ${e.message}</td></tr>`;
   }
 }
 
