@@ -49,7 +49,7 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
   }
 
   .wrap{
-    max-width:1180px;
+    max-width:1320px;
     margin:0 auto;
   }
 
@@ -61,6 +61,11 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
   }
   @media (min-width:980px){
     .layout{grid-template-columns:260px 1fr;}
+  }
+  .sidebar{
+    display:flex;
+    flex-direction:column;
+    gap:16px;
   }
   .main{
     min-width:0;
@@ -92,28 +97,31 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
     line-height:1.55;
   }
   .telegram-button{
-    flex:0 0 auto;
-    display:inline-flex;
+    display:flex;
     align-items:center;
     justify-content:center;
-    min-height:34px;
-    padding:0 13px;
-    border:1px solid rgba(31,203,122,0.35);
-    border-radius:6px;
-    background:rgba(31,203,122,0.09);
+    gap:8px;
+    width:100%;
+    min-height:48px;
+    padding:0 16px;
+    border:1px solid rgba(31,203,122,0.45);
+    border-radius:10px;
+    background:rgba(31,203,122,0.14);
     color:var(--buy);
     font-family:var(--mono);
-    font-size:11px;
+    font-size:13px;
     font-weight:700;
-    letter-spacing:0.04em;
+    letter-spacing:0.05em;
     text-decoration:none;
     text-transform:uppercase;
     white-space:nowrap;
-    transition:background 0.15s ease, border-color 0.15s ease;
+    box-shadow:0 0 0 1px rgba(31,203,122,0.05) inset;
+    transition:background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
   }
   .telegram-button:hover{
-    background:rgba(31,203,122,0.15);
-    border-color:rgba(31,203,122,0.65);
+    background:rgba(31,203,122,0.22);
+    border-color:rgba(31,203,122,0.8);
+    transform:translateY(-1px);
   }
 
   .fng-card{
@@ -284,13 +292,14 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
   }
   thead th{
     text-align:left;
-    font-size:11px;
-    letter-spacing:0.08em;
+    font-size:10.5px;
+    letter-spacing:0.06em;
     text-transform:uppercase;
     color:var(--text-dim);
     font-weight:500;
-    padding:14px 18px;
+    padding:14px 10px;
     border-bottom:1px solid var(--panel-line);
+    white-space:nowrap;
   }
   thead th.num{text-align:right;}
 
@@ -310,11 +319,12 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
   thead th.sortable.active .sort-arrow{opacity:1;}
 
   tbody td{
-    padding:16px 18px;
+    padding:14px 10px;
     border-bottom:1px solid var(--panel-line);
     font-family:var(--mono);
-    font-size:15px;
+    font-size:13px;
     vertical-align:middle;
+    white-space:nowrap;
   }
   tbody tr:last-child td{border-bottom:none;}
   tbody tr{position:relative;}
@@ -322,12 +332,13 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
   td.pair{
     font-family:var(--sans);
     font-weight:600;
-    font-size:14.5px;
+    font-size:13.5px;
+    white-space:normal;
   }
   td.pair .sub{
     display:block;
     font-family:var(--mono);
-    font-size:11px;
+    font-size:10.5px;
     color:var(--text-dim);
     font-weight:400;
     margin-top:2px;
@@ -338,27 +349,33 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
     align-items:center;
     gap:6px;
     font-weight:700;
-    font-size:13px;
+    font-size:12px;
     letter-spacing:0.04em;
-    padding:5px 10px;
+    padding:5px 9px;
     border-radius:6px;
   }
   .signal-pill.buy{color:var(--buy); background:rgba(31,203,122,0.1);}
   .signal-pill.sell{color:var(--sell); background:rgba(255,77,94,0.1);}
   .signal-pill .dot{width:6px; height:6px; border-radius:50%; background:currentColor;}
 
-  td.time{color:var(--text-dim); font-size:13.5px;}
+  td.time{color:var(--text-dim); font-size:12.5px;}
   td.num{text-align:right;}
 
   td.pl.pos{color:var(--buy); font-weight:600;}
   td.pl.neg{color:var(--sell); font-weight:600;}
 
-  th.chart-col{width:100px;}
-  td.chart-cell{padding:10px 18px;}
+  th.chart-col{width:80px;}
+  td.chart-cell{padding:10px 10px;}
   .spark{
     display:block;
-    width:90px;
-    height:28px;
+    width:74px;
+    height:26px;
+  }
+
+  .table-scroll{
+    width:100%;
+    overflow-x:auto;
+    border-radius:10px;
   }
 
   .footer-note{
@@ -450,13 +467,17 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
 
 <div class="wrap">
   <div class="layout">
-    <aside class="top5-card">
-      <span class="top5-title">TOP 5</span>
-      <span class="top5-subtitle">Best cumulative performance since Jan 2026</span>
-      <ol class="top5-list" id="top5List">
-        <li class="top5-empty">Loading…</li>
-      </ol>
-    </aside>
+    <div class="sidebar">
+      <aside class="top5-card">
+        <span class="top5-title">TOP 5</span>
+        <span class="top5-subtitle">Best cumulative performance since Jan 2026</span>
+        <ol class="top5-list" id="top5List">
+          <li class="top5-empty">Loading…</li>
+        </ol>
+      </aside>
+
+      <a class="telegram-button" id="telegramJoin" href="https://t.me/" target="_blank" rel="noopener">Join Telegram</a>
+    </div>
 
     <div class="main">
       <section class="intro">
@@ -464,7 +485,6 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
           <h1>Free Live Trading Signals</h1>
           <p>Live BTCUSD and XAUUSD buy and sell signals generated from technical indicators.</p>
         </div>
-        <a class="telegram-button" id="telegramJoin" href="https://t.me/" target="_blank" rel="noopener">Join Telegram</a>
       </section>
 
       <div class="fng-card" id="fngCard">
@@ -481,6 +501,7 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
         <span class="clock" id="clock">--:--:--</span>
       </div>
 
+      <div class="table-scroll">
       <table>
         <thead>
           <tr>
@@ -500,6 +521,7 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
           <tr><td colspan="10" style="text-align:center; color:var(--text-dim); font-family:var(--mono); font-size:13px; padding:24px;">Yükleniyor…</td></tr>
         </tbody>
       </table>
+      </div>
 
       <div class="pagination" id="pagination"></div>
 
