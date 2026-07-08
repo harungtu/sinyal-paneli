@@ -2,6 +2,7 @@ from flask import Flask, render_template, jsonify, send_from_directory
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock, Thread
+from datetime import datetime, timezone
 import json
 import os
 import time
@@ -14,7 +15,9 @@ _lock=Lock()
 _refresh_lock=Lock()
 _position_lock=Lock()
 _signal_state_lock=Lock()
+_history_lock=Lock()
 _positions={}
+_history_cache={}
 _last_good_pairs = []
 _last_good_errors = []
 _last_good_fear_greed = None
@@ -33,6 +36,15 @@ SMA_PERIOD = 50
 # (örn. coin SMA'nın hep aynı tarafında kalmışsa) bunu ayrıca işaretliyoruz.
 LOOKBACK_FOR_CROSSOVER = 150
 TOTAL_CANDLES = SMA_PERIOD + LOOKBACK_FOR_CROSSOVER
+
+# "Geçmiş" / "Performans %" sütunları: sadece o an açık olan son sinyalin değil,
+# 2026 başından bu yana üretilmiş TÜM sinyallerin (SMA50 kesişimlerinin) birleşik
+# (bileşik/compounded) performansını gösterir. Bu, "son sinyal" metriklerinden
+# (K/Z, Pip, Grafik) tamamen ayrı, kendi cache'i olan bir hesaplamadır.
+HISTORY_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+HISTORY_START_MS = int(HISTORY_START.timestamp() * 1000)
+INTERVAL_MS = {'1d': 24 * 60 * 60 * 1000, '4h': 4 * 60 * 60 * 1000}
+HISTORY_CACHE_SECONDS = int(os.environ.get('HISTORY_CACHE_SECONDS', '3600'))
 
 BASE_PAIRS = [
     {'symbol': 'BTCUSDT', 'label': 'BTC/USDT', 'pip_size': 1},
@@ -127,6 +139,123 @@ def find_signal_origin(klines):
         'origin_is_current_candle': origin_idx == len(days_with_direction) - 1,
         'pl_history': pl_history,
     }
+
+
+def fetch_klines_since(symbol, interval, start_ms):
+    """Binance'ten start_ms'ten şimdiye kadar TÜM kline'ları sayfalayarak çeker.
+    Tek istekteki 1000 mum limitini aşan (örn. 4h aralıkta aylarca veri) durumlar için."""
+    interval_ms = INTERVAL_MS.get(interval, INTERVAL_MS['1d'])
+    all_klines = []
+    cursor = start_ms
+    now_ms = int(time.time() * 1000)
+
+    while cursor < now_ms:
+        r = _session.get(
+            'https://api.binance.com/api/v3/klines',
+            params={'symbol': symbol, 'interval': interval, 'startTime': cursor, 'limit': 1000},
+            timeout=15,
+        )
+        r.raise_for_status()
+        batch = r.json()
+        if not batch:
+            break
+
+        all_klines.extend(batch)
+        last_open_time = batch[-1][0]
+        if last_open_time <= cursor:
+            break  # ilerleme yoksa sonsuz döngüye girmemek için dur
+
+        cursor = last_open_time + interval_ms
+        if len(batch) < 1000:
+            break
+
+    return all_klines
+
+
+def compute_daily_directions(klines, sma_period):
+    """Her gün için kendinden önceki sma_period günün ortalamasına göre yön (True=BUY)."""
+    closes = [float(k[4]) for k in klines]
+    open_times = [k[0] for k in klines]
+
+    days = []
+    for i in range(sma_period, len(closes)):
+        window = closes[i - sma_period:i]
+        sma_i = sum(window) / sma_period
+        price_i = closes[i]
+        days.append((open_times[i], price_i, price_i > sma_i, sma_i))
+    return days
+
+
+def compute_signal_history(days, history_start_ms):
+    """days: (open_time, close, direction_bool, sma) listesi, eskiden yeniye sıralı.
+
+    history_start_ms'ten bu yana üretilmiş TÜM sinyalleri (yön değişimlerini) bulup
+    her birinin kendi giriş/çıkış performansını sırayla bileşik (compounded) olarak
+    zincirler. Böylece "şu an açık olan son sinyal" değil, o tarihten bu yana
+    açılmış olan TÜM sinyallerin toplam performansı elde edilir.
+
+    Dönen değer: (curve, total_pct) — curve, her gün için kümülatif % değerlerinin
+    kronolojik listesi (sparkline için); total_pct, curve'ün son (güncel) değeri.
+    Pencerede hiç veri yoksa (None, None) döner.
+    """
+    window = [d for d in days if d[0] >= history_start_ms]
+    if not window:
+        return None, None
+
+    segments = []
+    seg_start = 0
+    current_dir = window[0][2]
+    for i in range(1, len(window)):
+        if window[i][2] != current_dir:
+            segments.append((seg_start, i - 1, current_dir))
+            seg_start = i
+            current_dir = window[i][2]
+    segments.append((seg_start, len(window) - 1, current_dir))
+
+    equity = 1.0
+    curve = []
+    for seg_start_idx, seg_end_idx, direction in segments:
+        entry_price = window[seg_start_idx][1]
+        direction_sign = 1 if direction else -1
+        day_equity = equity
+
+        for idx in range(seg_start_idx, seg_end_idx + 1):
+            day_close = window[idx][1]
+            trade_frac = (day_close - entry_price) / entry_price * direction_sign
+            day_equity = equity * (1 + trade_frac)
+            curve.append((day_equity - 1) * 100)
+
+        equity = day_equity
+
+    total_pct = curve[-1] if curve else 0.0
+    return curve, total_pct
+
+
+def get_signal_history(symbol, interval, sma_period=SMA_PERIOD):
+    """2026 başından bu yana bileşik sinyal performansını döndürür (curve, total_pct).
+
+    Bu hesaplama, tam geçmişi sayfalayarak çekmek zorunda olduğundan pahalıdır;
+    bu yüzden ana 60 saniyelik yenileme döngüsünden bağımsız, kendi (varsayılan
+    1 saatlik) cache'i vardır."""
+    cache_key = f'{symbol}:{interval}'
+
+    with _history_lock:
+        cached = _history_cache.get(cache_key)
+        if cached and time.time() - cached['ts'] < HISTORY_CACHE_SECONDS:
+            return cached['curve'], cached['total_pct']
+
+    interval_ms = INTERVAL_MS.get(interval, INTERVAL_MS['1d'])
+    buffer_ms = interval_ms * (sma_period + 5)
+    fetch_start_ms = HISTORY_START_MS - buffer_ms
+
+    klines = fetch_klines_since(symbol, interval, fetch_start_ms)
+    days = compute_daily_directions(klines, sma_period)
+    curve, total_pct = compute_signal_history(days, HISTORY_START_MS)
+
+    with _history_lock:
+        _history_cache[cache_key] = {'ts': time.time(), 'curve': curve, 'total_pct': total_pct}
+
+    return curve, total_pct
 
 
 def _is_tradeable_usdt_crypto(symbol_info):
@@ -336,6 +465,13 @@ def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
         for k in raw[-(SMA_PERIOD + 1):]
     ]
 
+    try:
+        history_curve, history_pl = get_signal_history(symbol, interval)
+    except Exception:
+        # "Geçmiş" / "Performans %" opsiyonel bir ek katman; hesaplanamazsa
+        # son sinyalin kendi verilerini (K/Z, Pip, Grafik) etkilemesin.
+        history_curve, history_pl = None, None
+
     return {
         'symbol': symbol,
         'label': label,
@@ -349,6 +485,8 @@ def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
         'pl': pl,
         'pips': pips,
         'pl_history': origin['pl_history'],
+        'history_curve': history_curve or [],
+        'history_pl': history_pl,
         'history': history,
     }
 

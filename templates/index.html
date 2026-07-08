@@ -390,12 +390,13 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
         <th class="num sortable" data-sort-key="price">Son Fiyat<span class="sort-arrow"></span></th>
         <th class="num sortable" data-sort-key="pl">K/Z<span class="sort-arrow"></span></th>
         <th class="num sortable" data-sort-key="pips">Pip<span class="sort-arrow"></span></th>
+        <th class="chart-col">Grafik</th>
         <th class="chart-col">Geçmiş</th>
-        <th class="num sortable" data-sort-key="pl">Performans %<span class="sort-arrow"></span></th>
+        <th class="num sortable" data-sort-key="history_pl">Performans %<span class="sort-arrow"></span></th>
       </tr>
     </thead>
     <tbody id="tableBody">
-      <tr><td colspan="9" style="text-align:center; color:var(--text-dim); font-family:var(--mono); font-size:13px; padding:24px;">Yükleniyor…</td></tr>
+      <tr><td colspan="10" style="text-align:center; color:var(--text-dim); font-family:var(--mono); font-size:13px; padding:24px;">Yükleniyor…</td></tr>
     </tbody>
   </table>
 
@@ -468,6 +469,11 @@ function renderRow(p){
   const pipsSign = pipsVal >= 0 ? '+' : '';
   const intervalText = p.interval ? ` · ${p.interval.toUpperCase()}` : '';
 
+  const historyVal = (p.history_pl === null || p.history_pl === undefined) ? null : p.history_pl;
+  const historyClass = historyVal === null ? '' : (historyVal >= 0 ? 'pos' : 'neg');
+  const historySign = (historyVal !== null && historyVal >= 0) ? '+' : '';
+  const historyDisplay = historyVal === null ? '—' : `${historySign}${fmtNum(historyVal)}%`;
+
   return `
     <tr>
       <td class="pair" data-label="Parite">${p.label}<span class="sub">${p.symbol}${intervalText}</span></td>
@@ -479,8 +485,9 @@ function renderRow(p){
       <td class="num" data-label="Son Fiyat">${p.price ? fmtNum(p.price) : '—'}</td>
       <td class="num pl ${plClass}" data-label="K/Z">${plSign}${fmtNum(plVal)}%</td>
       <td class="num pl ${pipsClass}" data-label="Pip">${pipsSign}${fmtNum(pipsVal, 0)}</td>
-      <td class="chart-cell" data-label="Geçmiş">${buildSparkline(p.pl_history, isBuy)}</td>
-      <td class="num pl ${plClass}" data-label="Performans %">${plSign}${fmtNum(plVal)}%</td>
+      <td class="chart-cell" data-label="Grafik" title="Aktif sinyalin kendi başlangıcından bu yana performansı">${buildSparkline(p.pl_history)}</td>
+      <td class="chart-cell" data-label="Geçmiş" title="2026 başından bu yana tüm sinyallerin birleşik (bileşik) performansı">${buildSparkline(p.history_curve)}</td>
+      <td class="num pl ${historyClass}" data-label="Performans %" title="2026 başından bu yana toplam bileşik getiri">${historyDisplay}</td>
     </tr>
   `;
 }
@@ -518,7 +525,7 @@ function renderFearGreed(fg){
 }
 
 function renderErrorRow(e){
-  return `<tr class="error-row"><td colspan="9">${e.label}: ${e.error}</td></tr>`;
+  return `<tr class="error-row"><td colspan="10">${e.label}: ${e.error}</td></tr>`;
 }
 
 let lastPairs = [];
@@ -536,6 +543,7 @@ const SORT_GETTERS = {
   price: p => p.price || 0,
   pl: p => p.pl || 0,
   pips: p => p.pips || 0,
+  history_pl: p => (p.history_pl === null || p.history_pl === undefined) ? -Infinity : p.history_pl,
 };
 
 function applySort(pairs){
@@ -604,7 +612,7 @@ function renderTable(){
   }
 
   if(!html){
-    html = `<tr><td colspan="9" style="text-align:center; color:var(--text-dim); font-family:var(--mono); font-size:13px; padding:24px;">Veri yok</td></tr>`;
+    html = `<tr><td colspan="10" style="text-align:center; color:var(--text-dim); font-family:var(--mono); font-size:13px; padding:24px;">Veri yok</td></tr>`;
   }
 
   tbody.innerHTML = html;
@@ -640,7 +648,7 @@ async function refresh(){
     renderTable();
   } catch(e){
     document.getElementById('tableBody').innerHTML =
-      `<tr class="error-row"><td colspan="9">Sunucuya bağlanılamadı: ${e.message}</td></tr>`;
+      `<tr class="error-row"><td colspan="10">Sunucuya bağlanılamadı: ${e.message}</td></tr>`;
   }
 }
 
