@@ -514,7 +514,14 @@ def fetch_fear_greed():
 def _fetch_all():
     results = []
     errors = []
-    pairs = get_pairs()
+    try:
+        pairs = get_pairs()
+    except requests.RequestException as e:
+        errors.append({'symbol': 'PAIRS', 'label': 'Pair Listesi', 'error': f'Binance pair listesi alinamadi: {e}'})
+        pairs = list(BASE_PAIRS) + list(MAJOR_4H_PAIRS)
+    except Exception as e:
+        errors.append({'symbol': 'PAIRS', 'label': 'Pair Listesi', 'error': f'Beklenmeyen hata: {e}'})
+        pairs = list(BASE_PAIRS) + list(MAJOR_4H_PAIRS)
 
     with ThreadPoolExecutor(max_workers=min(10,len(pairs))) as ex:
         futs=[
@@ -630,7 +637,10 @@ start_background_signal_watcher()
 
 @app.route('/api')
 def api():
-    return jsonify(fetch_all())
+    try:
+        return jsonify(fetch_all())
+    except Exception as e:
+        return jsonify({'pairs': [], 'errors': [{'symbol': 'SERVER', 'label': 'Sunucu', 'error': str(e)}], 'fear_greed': None}), 500
 
 
 if __name__ == '__main__':
