@@ -438,7 +438,7 @@ def notify_signal_changes(pairs):
 
 def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
     r = _session.get(
-        'https://api.binance.com/api/v3/klines',
+        'https://api1.binance.com/api/v3/klines',
         params={'symbol': symbol, 'interval': interval, 'limit': TOTAL_CANDLES},
         timeout=10,
     )
