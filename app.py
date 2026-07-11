@@ -639,12 +639,12 @@ def fetch_all():
     global _last_good_pairs, _last_good_errors, _last_good_fear_greed
 
     with _lock:
-        if _cache['data'] and time.time()-_cache['ts']<60:
+        if _cache['data'] and time.time()-_cache['ts']<300:
             return _cache['data']
 
     with _refresh_lock:
         with _lock:
-            if _cache['data'] and time.time()-_cache['ts']<60:
+            if _cache['data'] and time.time()-_cache['ts']<300:
                 return _cache['data']
 
         data=_fetch_all()
