@@ -151,7 +151,7 @@ def fetch_klines_since(symbol, interval, start_ms):
 
     while cursor < now_ms:
         r = _session.get(
-            'https://api.binance.com/api/v3/klines',
+            'https://data-api.binance.vision/api/v3/klines',
             params={'symbol': symbol, 'interval': interval, 'startTime': cursor, 'limit': 1000},
             timeout=15,
         )
@@ -286,23 +286,39 @@ def _label_for(symbol_info):
     return f"{symbol_info.get('baseAsset')}/{symbol_info.get('quoteAsset')}"
 
 
+_exchange_info_cache = {'ts': 0, 'data': None}
+EXCHANGE_INFO_CACHE_SECONDS = int(os.environ.get('EXCHANGE_INFO_CACHE_SECONDS', '1800'))
+
+
+def _get_exchange_info():
+    now = time.time()
+    if _exchange_info_cache['data'] and now - _exchange_info_cache['ts'] < EXCHANGE_INFO_CACHE_SECONDS:
+        return _exchange_info_cache['data']
+
+    exchange_info = _session.get(
+        'https://data-api.binance.vision/api/v3/exchangeInfo',
+        timeout=10,
+    )
+    exchange_info.raise_for_status()
+    data = exchange_info.json()
+    _exchange_info_cache['data'] = data
+    _exchange_info_cache['ts'] = now
+    return data
+
+
 def get_pairs():
     pairs = list(BASE_PAIRS)
     known_keys = {(p['symbol'], p.get('interval', INTERVAL)) for p in pairs}
 
-    exchange_info = _session.get(
-        'https://api.binance.com/api/v3/exchangeInfo',
-        timeout=10,
-    )
-    exchange_info.raise_for_status()
+    exchange_info_data = _get_exchange_info()
     symbols_by_name = {
         item['symbol']: item
-        for item in exchange_info.json().get('symbols', [])
+        for item in exchange_info_data.get('symbols', [])
         if _is_tradeable_usdt_crypto(item)
     }
 
     tickers = _session.get(
-        'https://api.binance.com/api/v3/ticker/24hr',
+        'https://data-api.binance.vision/api/v3/ticker/24hr',
         timeout=10,
     )
     tickers.raise_for_status()
@@ -438,7 +454,7 @@ def notify_signal_changes(pairs):
 
 def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
     r = _session.get(
-        'https://api1.binance.com/api/v3/klines',
+        'https://data-api.binance.vision/api/v3/klines',
         params={'symbol': symbol, 'interval': interval, 'limit': TOTAL_CANDLES},
         timeout=10,
     )
