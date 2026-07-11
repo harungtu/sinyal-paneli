@@ -26,7 +26,7 @@ SIGNAL_STATE_FILE = 'signals_state.json'
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 TELEGRAM_ALERTS_ENABLED = os.environ.get('TELEGRAM_ALERTS_ENABLED', 'true').lower() == 'true'
-BACKGROUND_REFRESH_SECONDS = int(os.environ.get('BACKGROUND_REFRESH_SECONDS', '60'))
+BACKGROUND_REFRESH_SECONDS = int(os.environ.get('BACKGROUND_REFRESH_SECONDS', '300'))
 
 INTERVAL = '1d'
 SMA_PERIOD = 50
@@ -44,14 +44,16 @@ TOTAL_CANDLES = SMA_PERIOD + LOOKBACK_FOR_CROSSOVER
 HISTORY_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 HISTORY_START_MS = int(HISTORY_START.timestamp() * 1000)
 INTERVAL_MS = {'1d': 24 * 60 * 60 * 1000, '4h': 4 * 60 * 60 * 1000}
+INTERVAL_SECONDS = {'1d': 24 * 60 * 60, '4h': 4 * 60 * 60}
+KUCOIN_KLINE_TYPE = {'1d': '1day', '4h': '4hour'}
 HISTORY_CACHE_SECONDS = int(os.environ.get('HISTORY_CACHE_SECONDS', '3600'))
 
 BASE_PAIRS = [
-    {'symbol': 'BTCUSDT', 'label': 'BTC/USDT', 'pip_size': 1},
-    {'symbol': 'PAXGUSDT', 'label': 'XAU/USD (PAXG)', 'pip_size': 0.01},
-    {'symbol': 'ETHUSDT', 'label': 'ETH/USDT', 'pip_size': 0.1},
-    {'symbol': 'SOLUSDT', 'label': 'SOL/USDT', 'pip_size': 0.01},
-    {'symbol': 'XRPUSDT', 'label': 'XRP/USDT', 'pip_size': 0.0001},
+    {'symbol': 'BTC-USDT', 'label': 'BTC/USDT', 'pip_size': 1},
+    {'symbol': 'PAXG-USDT', 'label': 'XAU/USD (PAXG)', 'pip_size': 0.01},
+    {'symbol': 'ETH-USDT', 'label': 'ETH/USDT', 'pip_size': 0.1},
+    {'symbol': 'SOL-USDT', 'label': 'SOL/USDT', 'pip_size': 0.01},
+    {'symbol': 'XRP-USDT', 'label': 'XRP/USDT', 'pip_size': 0.0001},
 ]
 MAJOR_4H_PAIRS = [
     {**pair, 'label': f"{pair['label']} 4H", 'interval': '4h'}
@@ -79,7 +81,8 @@ def robots():
 
 def find_signal_origin(klines):
     """
-    klines: Binance kline listesi, eskiden yeniye sıralı, en az SMA_PERIOD+1 eleman.
+    klines: KuCoin kline listesi (Binance benzeri formata çevrilmiş), eskiden yeniye
+    sıralı, en az SMA_PERIOD+1 eleman.
     Her gün için o günün kapanışı ile o güne kadarki SMA_PERIOD'luk SMA'sını
     karşılaştırıp BUY/SELL yönünü çıkarır, ardından sondan başa giderek yönün
     en son ne zaman değiştiğini (yani şu anki sinyalin gerçekte başladığı günü) bulur.
@@ -141,35 +144,53 @@ def find_signal_origin(klines):
     }
 
 
-def fetch_klines_since(symbol, interval, start_ms):
-    """Binance'ten start_ms'ten şimdiye kadar TÜM kline'ları sayfalayarak çeker.
-    Tek istekteki 1000 mum limitini aşan (örn. 4h aralıkta aylarca veri) durumlar için."""
-    interval_ms = INTERVAL_MS.get(interval, INTERVAL_MS['1d'])
-    all_klines = []
-    cursor = start_ms
-    now_ms = int(time.time() * 1000)
+def _normalize_kucoin_klines(raw):
+    """KuCoin candles: [time_sec, open, close, high, low, volume, turnover], en yeni önde.
+    Geri kalan kodun beklediği Binance benzeri [time_ms, open, high, low, close, volume]
+    formatına, eskiden yeniye sıralı şekilde çevirir."""
+    converted = [
+        [int(row[0]) * 1000, row[1], row[3], row[4], row[2], row[5]]
+        for row in raw
+    ]
+    converted.sort(key=lambda k: k[0])
+    return converted
 
-    while cursor < now_ms:
+
+def fetch_klines_since(symbol, interval, start_ms):
+    """KuCoin'den start_ms'ten şimdiye kadar TÜM kline'ları sayfalayarak çeker.
+    Tek istekteki 1500 mum limitini aşan (örn. 4h aralıkta aylarca veri) durumlar için."""
+    interval_seconds = INTERVAL_SECONDS.get(interval, INTERVAL_SECONDS['1d'])
+    kucoin_type = KUCOIN_KLINE_TYPE.get(interval, '1day')
+    all_klines = []
+    cursor = start_ms // 1000
+    now_s = int(time.time())
+
+    while cursor < now_s:
         r = _session.get(
-            'https://data-api.binance.vision/api/v3/klines',
-            params={'symbol': symbol, 'interval': interval, 'startTime': cursor, 'limit': 1000},
+            'https://api.kucoin.com/api/v1/market/candles',
+            params={'symbol': symbol, 'type': kucoin_type, 'startAt': cursor, 'endAt': now_s},
             timeout=15,
         )
         r.raise_for_status()
-        batch = r.json()
+        payload = r.json()
+        if payload.get('code') != '200000':
+            raise ValueError(payload.get('msg', 'KuCoin veri hatasi'))
+        batch = payload.get('data') or []
         if not batch:
             break
 
+        batch = _normalize_kucoin_klines(batch)
         all_klines.extend(batch)
         last_open_time = batch[-1][0]
-        if last_open_time <= cursor:
+        if last_open_time // 1000 <= cursor:
             break  # ilerleme yoksa sonsuz döngüye girmemek için dur
 
-        cursor = last_open_time + interval_ms
-        if len(batch) < 1000:
+        cursor = last_open_time // 1000 + interval_seconds
+        if len(batch) < 1500:
             break
 
-    return all_klines
+    dedup = {k[0]: k for k in all_klines}
+    return sorted(dedup.values(), key=lambda k: k[0])
 
 
 def compute_daily_directions(klines, sma_period):
@@ -260,11 +281,11 @@ def get_signal_history(symbol, interval, sma_period=SMA_PERIOD):
 
 def _is_tradeable_usdt_crypto(symbol_info):
     symbol = symbol_info.get('symbol', '')
-    base_asset = symbol_info.get('baseAsset', '')
+    base_asset = symbol_info.get('baseCurrency', '')
 
-    if symbol_info.get('status') != 'TRADING':
+    if not symbol_info.get('enableTrading'):
         return False
-    if symbol_info.get('quoteAsset') != 'USDT':
+    if symbol_info.get('quoteCurrency') != 'USDT':
         return False
     if base_asset in STABLE_BASE_ASSETS:
         return False
@@ -272,18 +293,19 @@ def _is_tradeable_usdt_crypto(symbol_info):
         return False
     if base_asset.endswith(LEVERAGED_SUFFIXES):
         return False
-    return symbol.endswith('USDT')
+    return symbol.endswith('-USDT')
 
 
 def _tick_size(symbol_info):
-    for flt in symbol_info.get('filters', []):
-        if flt.get('filterType') == 'PRICE_FILTER':
-            return float(flt.get('tickSize', 0)) or 0.01
-    return 0.01
+    try:
+        value = float(symbol_info.get('priceIncrement') or 0)
+        return value or 0.01
+    except (TypeError, ValueError):
+        return 0.01
 
 
 def _label_for(symbol_info):
-    return f"{symbol_info.get('baseAsset')}/{symbol_info.get('quoteAsset')}"
+    return f"{symbol_info.get('baseCurrency')}/{symbol_info.get('quoteCurrency')}"
 
 
 _exchange_info_cache = {'ts': 0, 'data': None}
@@ -295,12 +317,12 @@ def _get_exchange_info():
     if _exchange_info_cache['data'] and now - _exchange_info_cache['ts'] < EXCHANGE_INFO_CACHE_SECONDS:
         return _exchange_info_cache['data']
 
-    exchange_info = _session.get(
-        'https://data-api.binance.vision/api/v3/exchangeInfo',
-        timeout=10,
-    )
-    exchange_info.raise_for_status()
-    data = exchange_info.json()
+    r = _session.get('https://api.kucoin.com/api/v1/symbols', timeout=10)
+    r.raise_for_status()
+    payload = r.json()
+    if payload.get('code') != '200000':
+        raise ValueError(payload.get('msg', 'KuCoin sembol listesi hatasi'))
+    data = payload.get('data') or []
     _exchange_info_cache['data'] = data
     _exchange_info_cache['ts'] = now
     return data
@@ -310,25 +332,26 @@ def get_pairs():
     pairs = list(BASE_PAIRS)
     known_keys = {(p['symbol'], p.get('interval', INTERVAL)) for p in pairs}
 
-    exchange_info_data = _get_exchange_info()
+    symbols_data = _get_exchange_info()
     symbols_by_name = {
         item['symbol']: item
-        for item in exchange_info_data.get('symbols', [])
+        for item in symbols_data
         if _is_tradeable_usdt_crypto(item)
     }
 
-    tickers = _session.get(
-        'https://data-api.binance.vision/api/v3/ticker/24hr',
-        timeout=10,
-    )
+    tickers = _session.get('https://api.kucoin.com/api/v1/market/allTickers', timeout=10)
     tickers.raise_for_status()
+    tickers_payload = tickers.json()
+    if tickers_payload.get('code') != '200000':
+        raise ValueError(tickers_payload.get('msg', 'KuCoin ticker hatasi'))
+    ticker_list = (tickers_payload.get('data') or {}).get('ticker') or []
 
     ranked = sorted(
         (
-            ticker for ticker in tickers.json()
+            ticker for ticker in ticker_list
             if ticker.get('symbol') in symbols_by_name
         ),
-        key=lambda ticker: float(ticker.get('quoteVolume', 0)),
+        key=lambda ticker: float(ticker.get('volValue') or 0),
         reverse=True,
     )
 
@@ -453,13 +476,21 @@ def notify_signal_changes(pairs):
 
 
 def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
+    interval_seconds = INTERVAL_SECONDS.get(interval, INTERVAL_SECONDS['1d'])
+    kucoin_type = KUCOIN_KLINE_TYPE.get(interval, '1day')
+    now_s = int(time.time())
+    start_at = now_s - interval_seconds * (TOTAL_CANDLES + 2)
+
     r = _session.get(
-        'https://data-api.binance.vision/api/v3/klines',
-        params={'symbol': symbol, 'interval': interval, 'limit': TOTAL_CANDLES},
+        'https://api.kucoin.com/api/v1/market/candles',
+        params={'symbol': symbol, 'type': kucoin_type, 'startAt': start_at, 'endAt': now_s},
         timeout=10,
     )
     r.raise_for_status()
-    raw = r.json()
+    payload = r.json()
+    if payload.get('code') != '200000':
+        raise ValueError(payload.get('msg', 'KuCoin veri hatasi'))
+    raw = _normalize_kucoin_klines(payload.get('data') or [])
 
     origin = find_signal_origin(raw)
     if origin is None:
@@ -533,7 +564,7 @@ def _fetch_all():
     try:
         pairs = get_pairs()
     except requests.RequestException as e:
-        errors.append({'symbol': 'PAIRS', 'label': 'Pair Listesi', 'error': f'Binance pair listesi alinamadi: {e}'})
+        errors.append({'symbol': 'PAIRS', 'label': 'Pair Listesi', 'error': f'Pair listesi alinamadi: {e}'})
         pairs = list(BASE_PAIRS) + list(MAJOR_4H_PAIRS)
     except Exception as e:
         errors.append({'symbol': 'PAIRS', 'label': 'Pair Listesi', 'error': f'Beklenmeyen hata: {e}'})
