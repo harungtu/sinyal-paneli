@@ -1,5 +1,7 @@
 from flask import Flask, render_template, jsonify, send_from_directory
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock, Thread
 from datetime import datetime, timezone
@@ -9,7 +11,23 @@ import time
 
 app = Flask(__name__)
 
-_session=requests.Session()
+_session = requests.Session()
+_session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'application/json',
+})
+_retry_policy = Retry(
+    total=3,
+    connect=3,
+    read=3,
+    backoff_factor=0.7,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=['GET', 'POST'],
+)
+_adapter = HTTPAdapter(max_retries=_retry_policy)
+_session.mount('https://', _adapter)
+_session.mount('http://', _adapter)
 _cache={'ts':0,'data':None}
 _lock=Lock()
 _refresh_lock=Lock()
