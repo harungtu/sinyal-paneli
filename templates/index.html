@@ -471,7 +471,7 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
     <div class="sidebar">
       <aside class="top5-card">
         <span class="top5-title">TOP 5</span>
-        <span class="top5-subtitle">Best cumulative performance since Jan 2019</span>
+        <span class="top5-subtitle">Best cumulative performance since Jan 2020</span>
         <ol class="top5-list" id="top5List">
           <li class="top5-empty">Loading…</li>
         </ol>
@@ -514,7 +514,7 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
             <th class="num sortable" data-sort-key="pl">P/L<span class="sort-arrow"></span></th>
             <th class="num sortable" data-sort-key="pips">Pips<span class="sort-arrow"></span></th>
             <th class="chart-col">Chart</th>
-            <th class="chart-col">History</th>
+            <th class="chart-col">History (Since 2020)</th>
             <th class="num sortable" data-sort-key="history_pl">Performance %<span class="sort-arrow"></span></th>
           </tr>
         </thead>
@@ -616,7 +616,7 @@ function renderRow(p){
       <td class="num pl ${plClass}" data-label="P/L">${isWait ? '—' : `${plSign}${fmtNum(plVal)}%`}</td>
       <td class="num pl ${pipsClass}" data-label="Pips">${isWait ? '—' : `${pipsSign}${fmtNum(pipsVal, 0)}`}</td>
       <td class="chart-cell" data-label="Chart" title="Aktif sinyalin kendi başlangıcından bu yana performansı">${buildSparkline(p.pl_history)}</td>
-      <td class="chart-cell" data-label="History" title="2020 başından bu yana tüm sinyallerin birleşik (bileşik) performansı">${buildSparkline(p.history_curve)}</td>
+      <td class="chart-cell" data-label="History (Since 2020)" title="2020 başından bu yana tüm sinyallerin birleşik (bileşik) performansı">${buildSparkline(p.history_curve)}</td>
       <td class="num pl ${historyClass}" data-label="Performance %" title="2020 başından bu yana toplam bileşik getiri">${historyDisplay}</td>
     </tr>
   `;
