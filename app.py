@@ -56,10 +56,10 @@ LOOKBACK_FOR_CROSSOVER = 150
 TOTAL_CANDLES = SMA_PERIOD + LOOKBACK_FOR_CROSSOVER
 
 # "Geçmiş" / "Performans %" sütunları: sadece o an açık olan son sinyalin değil,
-# 2026 başından bu yana üretilmiş TÜM sinyallerin (SMA50 kesişimlerinin) birleşik
+# 2020 başından bu yana üretilmiş TÜM sinyallerin (SMA50 kesişimlerinin) birleşik
 # (bileşik/compounded) performansını gösterir. Bu, "son sinyal" metriklerinden
 # (K/Z, Pip, Grafik) tamamen ayrı, kendi cache'i olan bir hesaplamadır.
-HISTORY_START = datetime(2025, 1, 1, tzinfo=timezone.utc)
+HISTORY_START = datetime(2020, 1, 1, tzinfo=timezone.utc)
 HISTORY_START_MS = int(HISTORY_START.timestamp() * 1000)
 INTERVAL_MS = {'1d': 24 * 60 * 60 * 1000, '4h': 4 * 60 * 60 * 1000}
 INTERVAL_SECONDS = {'1d': 24 * 60 * 60, '4h': 4 * 60 * 60}
@@ -406,7 +406,7 @@ def compute_signal_history(days, history_start_ms):
 
 
 def get_signal_history(symbol, interval, sma_period=SMA_PERIOD):
-    """2026 başından bu yana bileşik sinyal performansını döndürür (curve, total_pct).
+    """2020 başından bu yana bileşik sinyal performansını döndürür (curve, total_pct).
 
     Bu hesaplama, tam geçmişi sayfalayarak çekmek zorunda olduğundan pahalıdır;
     bu yüzden ana 60 saniyelik yenileme döngüsünden bağımsız, kendi (varsayılan
@@ -531,7 +531,7 @@ def compute_trendtracker_history(klines, history_start_ms, filter_mode=TRENDTRAC
 
 
 def get_trendtracker_signal_history(symbol=TRENDTRACKER_SYMBOL, interval=TRENDTRACKER_INTERVAL):
-    """TrendTracker 4H icin 2026 basindan bu yana bileşik performans (curve, total_pct).
+    """TrendTracker 4H icin 2020 basindan bu yana bileşik performans (curve, total_pct).
     get_signal_history ile ayni cache mekanizmasini (kendi anahtariyla) kullanir."""
     cache_key = f'{symbol}:{interval}:trendtracker'
 
