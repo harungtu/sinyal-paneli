@@ -356,6 +356,7 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
   }
   .signal-pill.buy{color:var(--buy); background:rgba(31,203,122,0.1);}
   .signal-pill.sell{color:var(--sell); background:rgba(255,77,94,0.1);}
+  .signal-pill.wait{color:var(--text-dim); background:rgba(91,102,112,0.14);}
   .signal-pill .dot{width:6px; height:6px; border-radius:50%; background:currentColor;}
 
   td.time{color:var(--text-dim); font-size:12.5px;}
@@ -584,13 +585,17 @@ function buildSparkline(plHistory, isBuy){
 }
 
 function renderRow(p){
+  // TrendTracker gibi state-machine tabanli sinyaller icin ucuncu bir durum var:
+  // 'WAIT' -> henuz acik pozisyon yok (P/S dogru tarafta ama E/C teyidi gelmedi).
+  const isWait = p.signal === 'WAIT';
   const isBuy = p.signal === 'BUY';
-  const dirClass = isBuy ? 'buy' : 'sell';
+  const dirClass = isWait ? 'wait' : (isBuy ? 'buy' : 'sell');
+  const dirLabel = isWait ? 'BEKLEMEDE' : (isBuy ? 'BUY' : 'SELL');
   const plVal = p.pl || 0;
-  const plClass = plVal >= 0 ? 'pos' : 'neg';
+  const plClass = isWait ? '' : (plVal >= 0 ? 'pos' : 'neg');
   const plSign = plVal >= 0 ? '+' : '';
   const pipsVal = p.pips || 0;
-  const pipsClass = pipsVal >= 0 ? 'pos' : 'neg';
+  const pipsClass = isWait ? '' : (pipsVal >= 0 ? 'pos' : 'neg');
   const pipsSign = pipsVal >= 0 ? '+' : '';
   const intervalText = p.interval ? ` · ${p.interval.toUpperCase()}` : '';
 
@@ -603,13 +608,13 @@ function renderRow(p){
     <tr>
       <td class="pair" data-label="Pair">${p.label}<span class="sub">${p.symbol}${intervalText}</span></td>
       <td data-label="Signal">
-        <span class="signal-pill ${dirClass}"><span class="dot"></span>${isBuy ? 'BUY' : 'SELL'}</span>
+        <span class="signal-pill ${dirClass}"><span class="dot"></span>${dirLabel}</span>
       </td>
-      <td class="time" data-label="Duration"${p.since_is_estimate ? ' title="Kesişim, elimizdeki geçmiş verinin dışında kalmış olabilir; bu süre bir alt sınırdır"' : ''}>${p.since_is_estimate ? '≥ ' : ''}${fmtDuration(p.since)}</td>
+      <td class="time" data-label="Duration"${p.since_is_estimate ? ' title="Kesişim, elimizdeki geçmiş verinin dışında kalmış olabilir; bu süre bir alt sınırdır"' : ''}>${p.since_is_estimate ? '≥ ' : ''}${isWait ? '—' : fmtDuration(p.since)}</td>
       <td class="num" data-label="Entry">${p.entry ? fmtNum(p.entry) : '—'}</td>
       <td class="num" data-label="Last Price">${p.price ? fmtNum(p.price) : '—'}</td>
-      <td class="num pl ${plClass}" data-label="P/L">${plSign}${fmtNum(plVal)}%</td>
-      <td class="num pl ${pipsClass}" data-label="Pips">${pipsSign}${fmtNum(pipsVal, 0)}</td>
+      <td class="num pl ${plClass}" data-label="P/L">${isWait ? '—' : `${plSign}${fmtNum(plVal)}%`}</td>
+      <td class="num pl ${pipsClass}" data-label="Pips">${isWait ? '—' : `${pipsSign}${fmtNum(pipsVal, 0)}`}</td>
       <td class="chart-cell" data-label="Chart" title="Aktif sinyalin kendi başlangıcından bu yana performansı">${buildSparkline(p.pl_history)}</td>
       <td class="chart-cell" data-label="History" title="2026 başından bu yana tüm sinyallerin birleşik (bileşik) performansı">${buildSparkline(p.history_curve)}</td>
       <td class="num pl ${historyClass}" data-label="Performance %" title="2026 başından bu yana toplam bileşik getiri">${historyDisplay}</td>
@@ -695,7 +700,7 @@ let currentPage = 1;
 
 const SORT_GETTERS = {
   label: p => (p.label || '').toLowerCase(),
-  signal: p => p.signal === 'BUY' ? 1 : 0,
+  signal: p => p.signal === 'BUY' ? 2 : (p.signal === 'WAIT' ? 1 : 0),
   since: p => p.since || 0,
   entry: p => p.entry || 0,
   price: p => p.price || 0,
