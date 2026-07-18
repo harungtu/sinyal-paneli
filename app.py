@@ -432,6 +432,127 @@ def get_signal_history(symbol, interval, sma_period=SMA_PERIOD):
     return curve, total_pct
 
 
+def compute_trendtracker_history(klines, history_start_ms, filter_mode=TRENDTRACKER_FILTER_MODE):
+    """TrendTracker 4H icin compute_signal_history'nin karsiligi.
+
+    Basit SMA50 kesisiminden farkli olarak TrendTracker her zaman pozisyonda
+    degildir (WAIT donemleri olabilir) ve giris/cikis E/C teyidine bagli
+    oldugundan, bu fonksiyon compute_trendtracker_signal ile AYNI state
+    machine'i bastan sona (warmup dahil) calistirip her mumda mark-to-market
+    (kapali islemler bileşik + acik islemin gerceklesmemis K/Z'si) bir sermaye
+    egrisi uretir, sonra history_start_ms'e denk gelen degeri 0% kabul edip
+    egriyi oradan itibaren yeniden olcekler.
+
+    Donen deger: (curve, total_pct) — compute_signal_history ile ayni sekil.
+    """
+    opens = [float(k[1]) for k in klines]
+    closes = [float(k[4]) for k in klines]
+    open_times = [k[0] for k in klines]
+    n = len(closes)
+
+    if n < TRENDTRACKER_SMA_TREND + TRENDTRACKER_SMA_SLOPE + 2:
+        return None, None
+
+    sma_trend = [None] * n
+    sma_slope = [None] * n
+    for i in range(TRENDTRACKER_SMA_TREND - 1, n):
+        sma_trend[i] = sum(closes[i - TRENDTRACKER_SMA_TREND + 1:i + 1]) / TRENDTRACKER_SMA_TREND
+    for i in range(TRENDTRACKER_SMA_SLOPE - 1, n):
+        sma_slope[i] = sum(closes[i - TRENDTRACKER_SMA_SLOPE + 1:i + 1]) / TRENDTRACKER_SMA_SLOPE
+
+    position = None
+    entry_price = None
+    realized_equity = 1.0  # kapanmis islemlerin bileşik carpani
+
+    eq_points = []  # (open_time, mark_to_market_equity) - sadece S tanimliyken
+
+    start_idx = TRENDTRACKER_SMA_TREND - 1
+    for i in range(start_idx, n):
+        S = sma_trend[i]
+        if S is None:
+            continue
+        P = closes[i]
+        t = open_times[i]
+        e_prev = sma_slope[i - 1] if i >= 1 else None
+        e_now = sma_slope[i]
+        E = (e_now - e_prev) if (e_now is not None and e_prev is not None) else None
+        c_green = closes[i] > opens[i] and (i >= 1 and closes[i - 1] > opens[i - 1])
+        c_red = closes[i] < opens[i] and (i >= 1 and closes[i - 1] < opens[i - 1])
+
+        if position == 'BUY' and P < S:
+            realized_equity *= (1 + (P - entry_price) / entry_price)
+            position = None
+        elif position == 'SELL' and P > S:
+            realized_equity *= (1 + (entry_price - P) / entry_price)
+            position = None
+
+        if position is None and E is not None:
+            e_up, e_down = E > 0, E < 0
+            if filter_mode == 'OR':
+                long_ok = e_up or c_green
+                short_ok = e_down or c_red
+            else:
+                long_ok = e_up and c_green
+                short_ok = e_down and c_red
+
+            if P > S and long_ok:
+                position, entry_price = 'BUY', P
+            elif P < S and short_ok:
+                position, entry_price = 'SELL', P
+
+        if position == 'BUY':
+            mtm_equity = realized_equity * (1 + (P - entry_price) / entry_price)
+        elif position == 'SELL':
+            mtm_equity = realized_equity * (1 + (entry_price - P) / entry_price)
+        else:
+            mtm_equity = realized_equity
+
+        eq_points.append((t, mtm_equity))
+
+    if not eq_points:
+        return None, None
+
+    # history_start_ms'e denk gelen ilk noktayi bul; oncesindeki (varsa acik
+    # pozisyonun o ana kadarki gerceklesmemis K/Z'si dahil) degeri "baz" (0%)
+    # olarak al, boylece egri sadece history_start_ms'ten sonrasini yansitir.
+    start_pos = 0
+    base_equity = 1.0
+    for idx, (t, eq) in enumerate(eq_points):
+        if t >= history_start_ms:
+            start_pos = idx
+            base_equity = eq_points[idx - 1][1] if idx > 0 else 1.0
+            break
+    else:
+        return None, None  # tum veri history_start_ms'ten once
+
+    curve = [(eq / base_equity - 1) * 100 for _, eq in eq_points[start_pos:]]
+    total_pct = curve[-1] if curve else 0.0
+    return curve, total_pct
+
+
+def get_trendtracker_signal_history(symbol=TRENDTRACKER_SYMBOL, interval=TRENDTRACKER_INTERVAL):
+    """TrendTracker 4H icin 2026 basindan bu yana bileşik performans (curve, total_pct).
+    get_signal_history ile ayni cache mekanizmasini (kendi anahtariyla) kullanir."""
+    cache_key = f'{symbol}:{interval}:trendtracker'
+
+    with _history_lock:
+        cached = _history_cache.get(cache_key)
+        if cached and time.time() - cached['ts'] < HISTORY_CACHE_SECONDS:
+            return cached['curve'], cached['total_pct']
+
+    interval_ms = INTERVAL_MS.get(interval, INTERVAL_MS['4h'])
+    warmup_ms = interval_ms * (TRENDTRACKER_SMA_TREND + TRENDTRACKER_SMA_SLOPE + TRENDTRACKER_LOOKBACK_CANDLES)
+    fetch_start_ms = HISTORY_START_MS - warmup_ms
+
+    klines = fetch_klines_since(symbol, interval, fetch_start_ms)
+    curve, total_pct = compute_trendtracker_history(klines, HISTORY_START_MS)
+
+    with _history_lock:
+        _history_cache[cache_key] = {'ts': time.time(), 'curve': curve, 'total_pct': total_pct}
+
+    return curve, total_pct
+
+
 def _is_tradeable_usdt_crypto(symbol_info):
     symbol = symbol_info.get('symbol', '')
     base_asset = symbol_info.get('baseCurrency', '')
@@ -687,6 +808,13 @@ def fetch_trendtracker_pair_data(symbol, label, pip_size, interval=TRENDTRACKER_
         for k in raw[-(TRENDTRACKER_SMA_TREND + 1):]
     ]
 
+    try:
+        history_curve, history_pl = get_trendtracker_signal_history(symbol, interval)
+    except Exception:
+        # "Gecmis" / "Performans %" opsiyonel bir ek katman; hesaplanamazsa
+        # ana sinyalin kendi verilerini (K/Z, Pip, Grafik) etkilemesin.
+        history_curve, history_pl = None, None
+
     return {
         'symbol': symbol,
         'label': label,
@@ -700,8 +828,8 @@ def fetch_trendtracker_pair_data(symbol, label, pip_size, interval=TRENDTRACKER_
         'pl': pl,
         'pips': pips,
         'pl_history': sig['pl_history'],
-        'history_curve': [],
-        'history_pl': None,
+        'history_curve': history_curve or [],
+        'history_pl': history_pl,
         'history': history,
     }
 
