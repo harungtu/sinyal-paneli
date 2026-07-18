@@ -59,7 +59,7 @@ TOTAL_CANDLES = SMA_PERIOD + LOOKBACK_FOR_CROSSOVER
 # 2026 başından bu yana üretilmiş TÜM sinyallerin (SMA50 kesişimlerinin) birleşik
 # (bileşik/compounded) performansını gösterir. Bu, "son sinyal" metriklerinden
 # (K/Z, Pip, Grafik) tamamen ayrı, kendi cache'i olan bir hesaplamadır.
-HISTORY_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+HISTORY_START = datetime(2025, 1, 1, tzinfo=timezone.utc)
 HISTORY_START_MS = int(HISTORY_START.timestamp() * 1000)
 INTERVAL_MS = {'1d': 24 * 60 * 60 * 1000, '4h': 4 * 60 * 60 * 1000}
 INTERVAL_SECONDS = {'1d': 24 * 60 * 60, '4h': 4 * 60 * 60}
