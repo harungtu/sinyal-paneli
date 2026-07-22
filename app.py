@@ -348,8 +348,6 @@ def get_signal_history(symbol, interval, sma_period=SMA_PERIOD):
     return curve, total_pct
 
 
-
-
 def _is_tradeable_usdt_crypto(symbol_info):
     symbol = symbol_info.get('symbol', '')
     base_asset = symbol_info.get('baseCurrency', '')
