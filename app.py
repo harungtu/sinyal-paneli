@@ -185,116 +185,7 @@ def find_signal_origin(klines):
     }
 
 
-def compute_trendtracker_signal(klines, filter_mode=TRENDTRACKER_FILTER_MODE):
-    """
-    TrendTracker 4H sinyal motoru (BTC/USDT icin, ayri/bagimsiz bir strateji).
 
-    klines: KuCoin'den cekilip Binance-benzeri formata cevrilmis kline listesi,
-    eskiden yeniye sirali (bkz. _normalize_kucoin_klines).
-
-    Kural seti (kullaniciyla birlikte backtest edilip onaylanan versiyon):
-      P = 4H mum kapanisi
-      S = SMA50 (TRENDTRACKER_SMA_TREND)
-      E = SMA20'nin egimi = bugunku SMA20 - bir onceki SMA20 (pozitif = yukari egimli)
-      C = son 2 mumun rengi (ikisi de yesil ya da ikisi de kirmizi)
-
-      LONG giris : P > S VE (E pozitif VEYA son 2 mum yesil)   [OR modu]
-      LONG cikis : P, S'nin altina inerse
-      SHORT giris: P < S VE (E negatif VEYA son 2 mum kirmizi) [OR modu]
-      SHORT cikis: P, S'nin ustune cikarsa
-
-      filter_mode='AND' verilirse eski/sert kural (E VE C birlikte) kullanilir;
-      canli sistemde onaylanan mod 'OR'dur.
-
-    Ayni anda tek pozisyon acik olabilir. Bir mumda cikis olsa bile ayni mum
-    icinde karsi yonlu kurulum saglaniyorsa hemen yeni pozisyon acilabilir.
-
-    Donen deger: dict(signal, entry, since, sma, price, active, pl_history)
-      - active=False ise su an acik pozisyon yoktur (P/S'nin dogru tarafinda
-        ama E/C teyidi henuz gelmemis, "bekleme" durumu); signal='WAIT' olur.
-    """
-    opens = [float(k[1]) for k in klines]
-    closes = [float(k[4]) for k in klines]
-    open_times = [k[0] for k in klines]
-    n = len(closes)
-
-    if n < TRENDTRACKER_SMA_TREND + TRENDTRACKER_SMA_SLOPE + 2:
-        return None
-
-    sma_trend = [None] * n
-    sma_slope = [None] * n
-    for i in range(TRENDTRACKER_SMA_TREND - 1, n):
-        sma_trend[i] = sum(closes[i - TRENDTRACKER_SMA_TREND + 1:i + 1]) / TRENDTRACKER_SMA_TREND
-    for i in range(TRENDTRACKER_SMA_SLOPE - 1, n):
-        sma_slope[i] = sum(closes[i - TRENDTRACKER_SMA_SLOPE + 1:i + 1]) / TRENDTRACKER_SMA_SLOPE
-
-    position = None      # None / 'BUY' / 'SELL'
-    entry_price = None
-    entry_time = None
-
-    start_idx = TRENDTRACKER_SMA_TREND - 1
-    for i in range(start_idx, n):
-        S = sma_trend[i]
-        if S is None:
-            continue
-        P = closes[i]
-        e_prev = sma_slope[i - 1] if i >= 1 else None
-        e_now = sma_slope[i]
-        E = (e_now - e_prev) if (e_now is not None and e_prev is not None) else None
-        c_green = closes[i] > opens[i] and (i >= 1 and closes[i - 1] > opens[i - 1])
-        c_red = closes[i] < opens[i] and (i >= 1 and closes[i - 1] < opens[i - 1])
-
-        # --- Once acik pozisyon icin cikis kontrolu ---
-        if position == 'BUY' and P < S:
-            position = None
-        elif position == 'SELL' and P > S:
-            position = None
-
-        # --- Flat ise giris kontrolu (ayni mumda cikis olsa bile tekrar bakilir) ---
-        if position is None and E is not None:
-            e_up, e_down = E > 0, E < 0
-            if filter_mode == 'OR':
-                long_ok = e_up or c_green
-                short_ok = e_down or c_red
-            else:
-                long_ok = e_up and c_green
-                short_ok = e_down and c_red
-
-            if P > S and long_ok:
-                position, entry_price, entry_time = 'BUY', P, open_times[i]
-            elif P < S and short_ok:
-                position, entry_price, entry_time = 'SELL', P, open_times[i]
-
-    price_now = closes[-1]
-    sma_now = sma_trend[-1]
-
-    if position is None:
-        return {
-            'signal': 'WAIT',
-            'entry': None,
-            'since': None,
-            'sma': sma_now,
-            'price': price_now,
-            'active': False,
-            'pl_history': [],
-        }
-
-    direction_sign = 1 if position == 'BUY' else -1
-    entry_idx = open_times.index(entry_time)
-    pl_history = [
-        (closes[j] - entry_price) / entry_price * 100 * direction_sign
-        for j in range(entry_idx, n)
-    ]
-
-    return {
-        'signal': position,
-        'entry': entry_price,
-        'since': entry_time,
-        'sma': sma_now,
-        'price': price_now,
-        'active': True,
-        'pl_history': pl_history,
-    }
 
 
 def _drop_unclosed_candle(klines, interval_ms, now_ms=None):
@@ -457,125 +348,6 @@ def get_signal_history(symbol, interval, sma_period=SMA_PERIOD):
     return curve, total_pct
 
 
-def compute_trendtracker_history(klines, history_start_ms, filter_mode=TRENDTRACKER_FILTER_MODE):
-    """TrendTracker 4H icin compute_signal_history'nin karsiligi.
-
-    Basit SMA50 kesisiminden farkli olarak TrendTracker her zaman pozisyonda
-    degildir (WAIT donemleri olabilir) ve giris/cikis E/C teyidine bagli
-    oldugundan, bu fonksiyon compute_trendtracker_signal ile AYNI state
-    machine'i bastan sona (warmup dahil) calistirip her mumda mark-to-market
-    (kapali islemler bileşik + acik islemin gerceklesmemis K/Z'si) bir sermaye
-    egrisi uretir, sonra history_start_ms'e denk gelen degeri 0% kabul edip
-    egriyi oradan itibaren yeniden olcekler.
-
-    Donen deger: (curve, total_pct) — compute_signal_history ile ayni sekil.
-    """
-    opens = [float(k[1]) for k in klines]
-    closes = [float(k[4]) for k in klines]
-    open_times = [k[0] for k in klines]
-    n = len(closes)
-
-    if n < TRENDTRACKER_SMA_TREND + TRENDTRACKER_SMA_SLOPE + 2:
-        return None, None
-
-    sma_trend = [None] * n
-    sma_slope = [None] * n
-    for i in range(TRENDTRACKER_SMA_TREND - 1, n):
-        sma_trend[i] = sum(closes[i - TRENDTRACKER_SMA_TREND + 1:i + 1]) / TRENDTRACKER_SMA_TREND
-    for i in range(TRENDTRACKER_SMA_SLOPE - 1, n):
-        sma_slope[i] = sum(closes[i - TRENDTRACKER_SMA_SLOPE + 1:i + 1]) / TRENDTRACKER_SMA_SLOPE
-
-    position = None
-    entry_price = None
-    realized_equity = 1.0  # kapanmis islemlerin bileşik carpani
-
-    eq_points = []  # (open_time, mark_to_market_equity) - sadece S tanimliyken
-
-    start_idx = TRENDTRACKER_SMA_TREND - 1
-    for i in range(start_idx, n):
-        S = sma_trend[i]
-        if S is None:
-            continue
-        P = closes[i]
-        t = open_times[i]
-        e_prev = sma_slope[i - 1] if i >= 1 else None
-        e_now = sma_slope[i]
-        E = (e_now - e_prev) if (e_now is not None and e_prev is not None) else None
-        c_green = closes[i] > opens[i] and (i >= 1 and closes[i - 1] > opens[i - 1])
-        c_red = closes[i] < opens[i] and (i >= 1 and closes[i - 1] < opens[i - 1])
-
-        if position == 'BUY' and P < S:
-            realized_equity *= (1 + (P - entry_price) / entry_price)
-            position = None
-        elif position == 'SELL' and P > S:
-            realized_equity *= (1 + (entry_price - P) / entry_price)
-            position = None
-
-        if position is None and E is not None:
-            e_up, e_down = E > 0, E < 0
-            if filter_mode == 'OR':
-                long_ok = e_up or c_green
-                short_ok = e_down or c_red
-            else:
-                long_ok = e_up and c_green
-                short_ok = e_down and c_red
-
-            if P > S and long_ok:
-                position, entry_price = 'BUY', P
-            elif P < S and short_ok:
-                position, entry_price = 'SELL', P
-
-        if position == 'BUY':
-            mtm_equity = realized_equity * (1 + (P - entry_price) / entry_price)
-        elif position == 'SELL':
-            mtm_equity = realized_equity * (1 + (entry_price - P) / entry_price)
-        else:
-            mtm_equity = realized_equity
-
-        eq_points.append((t, mtm_equity))
-
-    if not eq_points:
-        return None, None
-
-    # history_start_ms'e denk gelen ilk noktayi bul; oncesindeki (varsa acik
-    # pozisyonun o ana kadarki gerceklesmemis K/Z'si dahil) degeri "baz" (0%)
-    # olarak al, boylece egri sadece history_start_ms'ten sonrasini yansitir.
-    start_pos = 0
-    base_equity = 1.0
-    for idx, (t, eq) in enumerate(eq_points):
-        if t >= history_start_ms:
-            start_pos = idx
-            base_equity = eq_points[idx - 1][1] if idx > 0 else 1.0
-            break
-    else:
-        return None, None  # tum veri history_start_ms'ten once
-
-    curve = [(eq / base_equity - 1) * 100 for _, eq in eq_points[start_pos:]]
-    total_pct = curve[-1] if curve else 0.0
-    return curve, total_pct
-
-
-def get_trendtracker_signal_history(symbol=TRENDTRACKER_SYMBOL, interval=TRENDTRACKER_INTERVAL):
-    """TrendTracker 4H icin 2020 basindan bu yana bileşik performans (curve, total_pct).
-    get_signal_history ile ayni cache mekanizmasini (kendi anahtariyla) kullanir."""
-    cache_key = f'{symbol}:{interval}:trendtracker'
-
-    with _history_lock:
-        cached = _history_cache.get(cache_key)
-        if cached and time.time() - cached['ts'] < HISTORY_CACHE_SECONDS:
-            return cached['curve'], cached['total_pct']
-
-    interval_ms = INTERVAL_MS.get(interval, INTERVAL_MS['4h'])
-    warmup_ms = interval_ms * (TRENDTRACKER_SMA_TREND + TRENDTRACKER_SMA_SLOPE + TRENDTRACKER_LOOKBACK_CANDLES)
-    fetch_start_ms = HISTORY_START_MS - warmup_ms
-
-    klines = fetch_klines_since(symbol, interval, fetch_start_ms)
-    curve, total_pct = compute_trendtracker_history(klines, HISTORY_START_MS)
-
-    with _history_lock:
-        _history_cache[cache_key] = {'ts': time.time(), 'curve': curve, 'total_pct': total_pct}
-
-    return curve, total_pct
 
 
 def _is_tradeable_usdt_crypto(symbol_info):
@@ -672,7 +444,6 @@ def get_pairs():
         known_keys.add(pair_key)
 
     pairs.extend(MAJOR_4H_PAIRS)
-    pairs.extend(TRENDTRACKER_PAIRS)
     return pairs
 
 
@@ -719,7 +490,7 @@ def signal_state_key(pair):
 def format_telegram_signal(pair):
     direction_icon = '[BUY]' if pair['signal'] == 'BUY' else '[SELL]'
     label = pair.get('label', pair.get('symbol', ''))
-    for suffix in (' TrendTracker 4H', ' 5M', ' 4H', ' 1D'):
+    for suffix in (' 5M', ' 4H', ' 1D'):
         if label.endswith(suffix):
             label = label[:-len(suffix)]
             break
@@ -783,88 +554,6 @@ def notify_signal_changes(pairs):
         send_telegram_message(message)
 
 
-def fetch_trendtracker_pair_data(symbol, label, pip_size, interval=TRENDTRACKER_INTERVAL):
-    """fetch_pair_data'nin TrendTracker 4H karsiligi: SMA50 kesisimi yerine
-    compute_trendtracker_signal() ile hesaplanan E/C teyitli state machine kullanir."""
-    interval_seconds = INTERVAL_SECONDS.get(interval, INTERVAL_SECONDS['4h'])
-    kucoin_type = KUCOIN_KLINE_TYPE.get(interval, '4hour')
-    now_s = int(time.time())
-    total_candles = TRENDTRACKER_SMA_TREND + TRENDTRACKER_SMA_SLOPE + TRENDTRACKER_LOOKBACK_CANDLES
-    start_at = now_s - interval_seconds * (total_candles + 2)
-
-    r = _session.get(
-        'https://api.kucoin.com/api/v1/market/candles',
-        params={'symbol': symbol, 'type': kucoin_type, 'startAt': start_at, 'endAt': now_s},
-        timeout=15,
-    )
-    r.raise_for_status()
-    payload = r.json()
-    if payload.get('code') != '200000':
-        raise ValueError(payload.get('msg', 'KuCoin veri hatasi'))
-    raw = _normalize_kucoin_klines(payload.get('data') or [])
-
-    interval_ms = INTERVAL_MS.get(interval, INTERVAL_MS['4h'])
-    closed = _drop_unclosed_candle(raw, interval_ms)
-    live_price = float(raw[-1][4]) if raw else None
-
-    sig = compute_trendtracker_signal(closed)
-    if sig is None:
-        raise ValueError('Yetersiz geçmiş veri')
-
-    # Gosterim icin canli fiyati kullan (yoksa kapanmis mumlardan gelen fiyata don)
-    if live_price is not None:
-        sig['price'] = live_price
-
-    position_key = f'{symbol}:{interval}:trendtracker'
-    if sig['active']:
-        position = stabilize_position(
-            position_key,
-            {'signal': sig['signal'], 'since': sig['since'], 'entry': sig['entry']},
-        )
-        entry = position['entry']
-        direction = 1 if sig['signal'] == 'BUY' else -1
-        price = sig['price']
-        pl = (price - entry) / entry * 100 * direction
-        pips = (price - entry) / pip_size * direction
-        since = sig['since'] / 1000  # ms -> saniye
-    else:
-        with _position_lock:
-            _positions.pop(position_key, None)
-        entry = None
-        price = sig['price']
-        pl = 0.0
-        pips = 0.0
-        since = None
-
-    history = [
-        {'time': k[0], 'close': float(k[4])}
-        for k in raw[-(TRENDTRACKER_SMA_TREND + 1):]
-    ]
-
-    try:
-        history_curve, history_pl = get_trendtracker_signal_history(symbol, interval)
-    except Exception:
-        # "Gecmis" / "Performans %" opsiyonel bir ek katman; hesaplanamazsa
-        # ana sinyalin kendi verilerini (K/Z, Pip, Grafik) etkilemesin.
-        history_curve, history_pl = None, None
-
-    return {
-        'symbol': symbol,
-        'label': label,
-        'interval': interval,
-        'price': price,
-        'sma': sig['sma'],
-        'signal': sig['signal'],
-        'entry': entry,
-        'since': since,
-        'since_is_estimate': False,
-        'pl': pl,
-        'pips': pips,
-        'pl_history': sig['pl_history'],
-        'history_curve': history_curve or [],
-        'history_pl': history_pl,
-        'history': history,
-    }
 
 
 def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
@@ -962,15 +651,13 @@ def _fetch_all():
         pairs = get_pairs()
     except requests.RequestException as e:
         errors.append({'symbol': 'PAIRS', 'label': 'Pair Listesi', 'error': f'Pair listesi alinamadi: {e}'})
-        pairs = list(BASE_PAIRS) + list(MAJOR_4H_PAIRS) + list(TRENDTRACKER_PAIRS)
     except Exception as e:
         errors.append({'symbol': 'PAIRS', 'label': 'Pair Listesi', 'error': f'Beklenmeyen hata: {e}'})
-        pairs = list(BASE_PAIRS) + list(MAJOR_4H_PAIRS) + list(TRENDTRACKER_PAIRS)
 
     with ThreadPoolExecutor(max_workers=min(10,len(pairs))) as ex:
         futs=[
-            ex.submit(
-                fetch_trendtracker_pair_data if p.get('strategy') == 'trendtracker' else fetch_pair_data,
+             ex.submit(
+                fetch_pair_data,
                 p['symbol'],
                 p['label'],
                 p['pip_size'],
