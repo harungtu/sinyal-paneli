@@ -554,8 +554,6 @@ def notify_signal_changes(pairs):
         send_telegram_message(message)
 
 
-
-
 def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
     interval_seconds = INTERVAL_SECONDS.get(interval, INTERVAL_SECONDS['1d'])
     kucoin_type = KUCOIN_KLINE_TYPE.get(interval, '1day')
