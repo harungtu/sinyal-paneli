@@ -297,6 +297,25 @@ def compute_trendtracker_signal(klines, filter_mode=TRENDTRACKER_FILTER_MODE):
     }
 
 
+def _drop_unclosed_candle(klines, interval_ms, now_ms=None):
+    """KuCoin /market/candles, istek anina kadar (endAt=now) veri cektigimizde
+    henuz KAPANMAMIS (o an devam eden) son mumu da listeye dahil ediyor; bu
+    mumun 'close' degeri sabit degil, sorgu anindaki canli fiyat.
+
+    Sinyal yonu (BUY/SELL) ve SMA50 kesisimi SADECE kapanmis gunlere gore
+    belirlenmeli; aksi halde gun icinde fiyat SMA'nin etrafinda gidip geldikce
+    sinyal "flip-flop" yapar ve gercekte olmayan (fake) Telegram bildirimleri
+    tetiklenir. Bu fonksiyon, son mum henuz kapanmamissa onu listeden cikarir.
+    """
+    if not klines:
+        return klines
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
+    if klines[-1][0] + interval_ms > now_ms:
+        return klines[:-1]
+    return klines
+
+
 def _normalize_kucoin_klines(raw):
     """KuCoin candles: [time_sec, open, close, high, low, volume, turnover], en yeni önde.
     Geri kalan kodun beklediği Binance benzeri [time_ms, open, high, low, close, volume]
@@ -343,7 +362,13 @@ def fetch_klines_since(symbol, interval, start_ms):
             break
 
     dedup = {k[0]: k for k in all_klines}
-    return sorted(dedup.values(), key=lambda k: k[0])
+    sorted_klines = sorted(dedup.values(), key=lambda k: k[0])
+
+    # Backtest/"Gecmis" egrisi de kapanmamis son mumu bir islem gibi bileşik
+    # getiriye katmasin diye ayni kurali burada da uyguluyoruz (bkz. yorum
+    # icindeki _drop_unclosed_candle).
+    interval_ms = INTERVAL_MS.get(interval, INTERVAL_MS['1d'])
+    return _drop_unclosed_candle(sorted_klines, interval_ms)
 
 
 def compute_daily_directions(klines, sma_period):
@@ -778,9 +803,17 @@ def fetch_trendtracker_pair_data(symbol, label, pip_size, interval=TRENDTRACKER_
         raise ValueError(payload.get('msg', 'KuCoin veri hatasi'))
     raw = _normalize_kucoin_klines(payload.get('data') or [])
 
-    sig = compute_trendtracker_signal(raw)
+    interval_ms = INTERVAL_MS.get(interval, INTERVAL_MS['4h'])
+    closed = _drop_unclosed_candle(raw, interval_ms)
+    live_price = float(raw[-1][4]) if raw else None
+
+    sig = compute_trendtracker_signal(closed)
     if sig is None:
         raise ValueError('Yetersiz geçmiş veri')
+
+    # Gosterim icin canli fiyati kullan (yoksa kapanmis mumlardan gelen fiyata don)
+    if live_price is not None:
+        sig['price'] = live_price
 
     position_key = f'{symbol}:{interval}:trendtracker'
     if sig['active']:
@@ -851,7 +884,10 @@ def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
         raise ValueError(payload.get('msg', 'KuCoin veri hatasi'))
     raw = _normalize_kucoin_klines(payload.get('data') or [])
 
-    origin = find_signal_origin(raw)
+    interval_ms = INTERVAL_MS.get(interval, INTERVAL_MS['1d'])
+    closed = _drop_unclosed_candle(raw, interval_ms)
+
+    origin = find_signal_origin(closed)
     if origin is None:
         raise ValueError('Yetersiz geçmiş veri')
 
@@ -859,7 +895,9 @@ def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
     position_key = f'{symbol}:{interval}'
     position = stabilize_position(position_key, origin)
     entry = position['entry']
-    price = origin['price']
+    # Gosterilen fiyat/P&L icin en guncel (henuz kapanmamis olabilecek) fiyati
+    # kullaniyoruz; ama yon/entry/since yukarida SADECE kapanmis mumlardan geldi.
+    price = float(raw[-1][4]) if raw else origin['price']
     sma = origin['sma']
 
     direction = 1 if sig == 'BUY' else -1
