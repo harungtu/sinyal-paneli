@@ -59,7 +59,7 @@ TOTAL_CANDLES = SMA_PERIOD + LOOKBACK_FOR_CROSSOVER
 # 2020 başından bu yana üretilmiş TÜM sinyallerin (SMA50 kesişimlerinin) birleşik
 # (bileşik/compounded) performansını gösterir. Bu, "son sinyal" metriklerinden
 # (K/Z, Pip, Grafik) tamamen ayrı, kendi cache'i olan bir hesaplamadır.
-HISTORY_START = datetime(2015, 1, 1, tzinfo=timezone.utc)
+HISTORY_START = datetime(2025, 1, 1, tzinfo=timezone.utc)
 HISTORY_START_MS = int(HISTORY_START.timestamp() * 1000)
 INTERVAL_MS = {'1d': 24 * 60 * 60 * 1000, '4h': 4 * 60 * 60 * 1000}
 INTERVAL_SECONDS = {'1d': 24 * 60 * 60, '4h': 4 * 60 * 60}
@@ -197,46 +197,71 @@ def _normalize_kucoin_klines(raw):
 
 
 def fetch_klines_since(symbol, interval, start_ms):
-    """KuCoin'den start_ms'ten şimdiye kadar TÜM kline'ları sayfalayarak çeker.
-    Tek istekteki 1500 mum limitini aşan (örn. 4h aralıkta aylarca veri) durumlar için."""
     interval_seconds = INTERVAL_SECONDS.get(interval, INTERVAL_SECONDS['1d'])
     kucoin_type = KUCOIN_KLINE_TYPE.get(interval, '1day')
-    all_klines = []
-    cursor = start_ms // 1000
-    now_s = int(time.time())
 
-    while cursor < now_s:
+    all_klines = []
+    end_at = int(time.time())          # şimdi
+
+    while True:
+
         r = _session.get(
-            'https://api.kucoin.com/api/v1/market/candles',
-            params={'symbol': symbol, 'type': kucoin_type, 'startAt': cursor, 'endAt': now_s},
+            "https://api.kucoin.com/api/v1/market/candles",
+            params={
+                "symbol": symbol,
+                "type": kucoin_type,
+                "endAt": end_at,
+                "limit": 1500
+            },
             timeout=15,
         )
+
         r.raise_for_status()
+
         payload = r.json()
-        if payload.get('code') != '200000':
-            raise ValueError(payload.get('msg', 'KuCoin veri hatasi'))
-        batch = payload.get('data') or []
+
+        if payload.get("code") != "200000":
+            raise ValueError(payload.get("msg"))
+
+        batch = payload.get("data") or []
+
         if not batch:
             break
 
         batch = _normalize_kucoin_klines(batch)
-        all_klines.extend(batch)
-        last_open_time = batch[-1][0]
-        if last_open_time // 1000 <= cursor:
-            break  # ilerleme yoksa sonsuz döngüye girmemek için dur
 
-        cursor = last_open_time // 1000 + interval_seconds
+        all_klines.extend(batch)
+
+        oldest = batch[0][0] // 1000
+
+        # istediğimiz tarihe ulaştık
+        if oldest * 1000 <= start_ms:
+            break
+
+        # bir önceki sayfaya git
+        end_at = oldest - interval_seconds
+
         if len(batch) < 1500:
             break
 
+    # duplicate temizle
     dedup = {k[0]: k for k in all_klines}
-    sorted_klines = sorted(dedup.values(), key=lambda k: k[0])
 
-    # Backtest/"Gecmis" egrisi de kapanmamis son mumu bir islem gibi bileşik
-    # getiriye katmasin diye ayni kurali burada da uyguluyoruz (bkz. yorum
-    # icindeki _drop_unclosed_candle).
-    interval_ms = INTERVAL_MS.get(interval, INTERVAL_MS['1d'])
-    return _drop_unclosed_candle(sorted_klines, interval_ms)
+    klines = sorted(dedup.values(), key=lambda x: x[0])
+
+    # başlangıç tarihinden öncekileri at
+    klines = [k for k in klines if k[0] >= start_ms]
+
+    interval_ms = INTERVAL_MS.get(interval, INTERVAL_MS["1d"])
+    print(
+        symbol,
+        interval,
+        len(klines),
+        datetime.utcfromtimestamp(klines[0][0]/1000),
+        datetime.utcfromtimestamp(klines[-1][0]/1000)
+    )
+
+    return _drop_unclosed_candle(klines, interval_ms)
 
 
 def compute_daily_directions(klines, sma_period):
