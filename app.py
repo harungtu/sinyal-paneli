@@ -59,7 +59,7 @@ TOTAL_CANDLES = SMA_PERIOD + LOOKBACK_FOR_CROSSOVER
 # 2020 başından bu yana üretilmiş TÜM sinyallerin (SMA50 kesişimlerinin) birleşik
 # (bileşik/compounded) performansını gösterir. Bu, "son sinyal" metriklerinden
 # (K/Z, Pip, Grafik) tamamen ayrı, kendi cache'i olan bir hesaplamadır.
-HISTORY_START = datetime(2010, 1, 1, tzinfo=timezone.utc)
+HISTORY_START = datetime(2025, 1, 1, tzinfo=timezone.utc)
 HISTORY_START_MS = int(HISTORY_START.timestamp() * 1000)
 INTERVAL_MS = {'1d': 24 * 60 * 60 * 1000, '4h': 4 * 60 * 60 * 1000}
 INTERVAL_SECONDS = {'1d': 24 * 60 * 60, '4h': 4 * 60 * 60}
@@ -85,29 +85,6 @@ STABLE_BASE_ASSETS = {
 }
 LEVERAGED_SUFFIXES = ('UP', 'DOWN', 'BULL', 'BEAR')
 EXCLUDED_BASE_ASSETS = {'EIGEN', 'RLUSD', 'ZEC'}
-
-# --- TrendTracker 4H (BTC/USDT) -------------------------------------------
-# Ayri bir sinyal motoru: SMA50 kesisimine ek olarak SMA20 egimi (E) ve son
-# 2 mumun rengi (C) ile giris teyidi arar. Backtest edilip onaylanan kural
-# seti icin bkz. compute_trendtracker_signal() docstring'i.
-TRENDTRACKER_SYMBOL = 'BTC-USDT'
-TRENDTRACKER_INTERVAL = '4h'
-TRENDTRACKER_SMA_TREND = 50   # S
-TRENDTRACKER_SMA_SLOPE = 20   # E'nin hesaplandigi SMA
-TRENDTRACKER_FILTER_MODE = 'OR'  # onayli/canli mod: E VEYA C yeterli (yumusatilmis filtre)
-# State machine'in dogru mevcut pozisyona "oturmasi" icin SMA warmup'ina ek
-# olarak genis bir gecmis pencere cekiyoruz (yaklasik 125 gun / 750 mum).
-TRENDTRACKER_LOOKBACK_CANDLES = 750
-
-TRENDTRACKER_PAIRS = [
-    {
-        'symbol': TRENDTRACKER_SYMBOL,
-        'label': 'BTC/USDT TrendTracker 4H',
-        'pip_size': 1,
-        'interval': TRENDTRACKER_INTERVAL,
-        'strategy': 'trendtracker',
-    },
-]
 
 
 @app.route("/sitemap.xml")
