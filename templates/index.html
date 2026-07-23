@@ -124,66 +124,6 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
     transform:translateY(-1px);
   }
 
-  .fng-card{
-    display:none;
-    align-items:center;
-    justify-content:space-between;
-    gap:16px;
-    background:var(--panel);
-    border:1px solid var(--panel-line);
-    border-radius:10px;
-    padding:14px 18px;
-    margin-bottom:20px;
-  }
-  .fng-label{
-    font-family:var(--mono);
-    font-size:11px;
-    letter-spacing:0.08em;
-    text-transform:uppercase;
-    color:var(--text-dim);
-    white-space:nowrap;
-  }
-  .fng-meter{
-    position:relative;
-    flex:1;
-    height:6px;
-    border-radius:3px;
-    margin:0 4px;
-    background:linear-gradient(90deg, var(--sell), #FFB020, var(--text-dim), #8BD17C, var(--buy));
-  }
-  .fng-dot{
-    position:absolute;
-    top:50%;
-    width:10px;
-    height:10px;
-    border-radius:50%;
-    background:var(--text);
-    border:2px solid var(--bg);
-    transform:translate(-50%,-50%);
-    transition:left 0.3s ease;
-  }
-  .fng-readout{
-    display:flex;
-    align-items:baseline;
-    gap:8px;
-    white-space:nowrap;
-  }
-  .fng-value{
-    font-family:var(--mono);
-    font-size:18px;
-    font-weight:700;
-  }
-  .fng-classification{
-    font-family:var(--mono);
-    font-size:11.5px;
-    color:var(--text-dim);
-  }
-
-  @media (max-width: 640px){
-    .fng-card{flex-wrap:wrap;}
-    .fng-meter{width:100%; order:3; margin:6px 0 0;}
-  }
-
   .top5-card{
     background:var(--panel);
     border:1px solid var(--panel-line);
@@ -488,15 +428,6 @@ content="bitcoin signal, btcusd signal, xauusd signal, gold signal, crypto signa
         </div>
       </section>
 
-      <div class="fng-card" id="fngCard">
-        <span class="fng-label">Fear &amp; Greed</span>
-        <div class="fng-meter"><span class="fng-dot" id="fngDot" style="left:50%;"></span></div>
-        <div class="fng-readout">
-          <span class="fng-value" id="fngValue">--</span>
-          <span class="fng-classification" id="fngClass">—</span>
-        </div>
-      </div>
-
       <div class="header-row">
         <span class="title">Sinyal paneli</span>
         <span class="clock" id="clock">--:--:--</span>
@@ -558,21 +489,31 @@ function updateClock(){
 setInterval(updateClock, 1000);
 updateClock();
 
-function buildSparkline(plHistory, isBuy){
+function buildSparkline(plHistory, isBuy, logScale){
   const w = 90, h = 28, pad = 2;
   if(!plHistory || plHistory.length < 2){
     return `<svg class="spark" viewBox="0 0 ${w} ${h}"></svg>`;
   }
 
-  const min = Math.min(...plHistory, 0);
-  const max = Math.max(...plHistory, 0);
+  // Bileşik (compounded) geçmiş performans yıllar içinde üstel büyüyebilir
+  // (örn. binlerce/milyonlarca %); doğrusal ölçekte bu durumda çizgi neredeyse
+  // tüm geçmiş boyunca düz kalıp yalnızca son birkaç günde dikleşir. logScale
+  // açıkken değerleri sign*log1p(|v|) ile sıkıştırıp ölçeği buna göre kuruyoruz;
+  // gösterilen % rakamı (Performance % sütunu) bundan etkilenmez, sadece çizgi
+  // dönem boyunca gerçekleşen hareketi daha okunur şekilde yansıtır.
+  const scaled = logScale
+    ? plHistory.map(v => Math.sign(v) * Math.log1p(Math.abs(v)))
+    : plHistory;
+
+  const min = Math.min(...scaled, 0);
+  const max = Math.max(...scaled, 0);
   const range = (max - min) || 1;
 
-  const xStep = (w - pad*2) / (plHistory.length - 1);
+  const xStep = (w - pad*2) / (scaled.length - 1);
   const yOf = v => h - pad - ((v - min) / range) * (h - pad*2);
   const zeroY = yOf(0);
 
-  const pts = plHistory.map((v,i) => `${(pad + i*xStep).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ');
+  const pts = scaled.map((v,i) => `${(pad + i*xStep).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ');
   const lastVal = plHistory[plHistory.length - 1];
   const lineColor = lastVal >= 0 ? 'var(--buy)' : 'var(--sell)';
 
@@ -616,42 +557,10 @@ function renderRow(p){
       <td class="num pl ${plClass}" data-label="P/L">${isWait ? '—' : `${plSign}${fmtNum(plVal)}%`}</td>
       <td class="num pl ${pipsClass}" data-label="Pips">${isWait ? '—' : `${pipsSign}${fmtNum(pipsVal, 0)}`}</td>
       <td class="chart-cell" data-label="Chart" title="Aktif sinyalin kendi başlangıcından bu yana performansı">${buildSparkline(p.pl_history)}</td>
-      <td class="chart-cell" data-label="History (Since 2020)" title="2020 başından bu yana tüm sinyallerin birleşik (bileşik) performansı">${buildSparkline(p.history_curve)}</td>
+      <td class="chart-cell" data-label="History (Since 2020)" title="2020 başından bu yana tüm sinyallerin birleşik (bileşik) performansı">${buildSparkline(p.history_curve, null, true)}</td>
       <td class="num pl ${historyClass}" data-label="Performance %" title="2020 başından bu yana toplam bileşik getiri">${historyDisplay}</td>
     </tr>
   `;
-}
-
-const FNG_LABELS_TR = {
-  'Extreme Fear': 'Aşırı Korku',
-  'Fear': 'Korku',
-  'Neutral': 'Nötr',
-  'Greed': 'Açgözlülük',
-  'Extreme Greed': 'Aşırı Açgözlülük',
-};
-
-function fngColor(value){
-  if(value <= 24) return 'var(--sell)';
-  if(value <= 44) return '#FFB020';
-  if(value <= 55) return 'var(--text-dim)';
-  if(value <= 75) return '#8BD17C';
-  return 'var(--buy)';
-}
-
-function renderFearGreed(fg){
-  const card = document.getElementById('fngCard');
-  if(!fg || fg.value === undefined || fg.value === null){
-    card.style.display = 'none';
-    return;
-  }
-
-  card.style.display = 'flex';
-  const color = fngColor(fg.value);
-  const valueEl = document.getElementById('fngValue');
-  valueEl.textContent = fg.value;
-  valueEl.style.color = color;
-  document.getElementById('fngClass').textContent = FNG_LABELS_TR[fg.classification] || fg.classification || '—';
-  document.getElementById('fngDot').style.left = `${Math.max(0, Math.min(100, fg.value))}%`;
 }
 
 function renderTop5(pairs){
@@ -807,7 +716,6 @@ async function refresh(){
     lastPairs = data.pairs || [];
     lastErrors = data.errors || [];
 
-    renderFearGreed(data.fear_greed);
     renderTop5(lastPairs);
     renderTable();
   } catch(e){

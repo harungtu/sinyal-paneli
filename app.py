@@ -38,7 +38,6 @@ _positions={}
 _history_cache={}
 _last_good_pairs = []
 _last_good_errors = []
-_last_good_fear_greed = None
 _background_watcher_started = False
 SIGNAL_STATE_FILE = 'signals_state.json'
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
@@ -59,7 +58,7 @@ TOTAL_CANDLES = SMA_PERIOD + LOOKBACK_FOR_CROSSOVER
 # 2020 başından bu yana üretilmiş TÜM sinyallerin (SMA50 kesişimlerinin) birleşik
 # (bileşik/compounded) performansını gösterir. Bu, "son sinyal" metriklerinden
 # (K/Z, Pip, Grafik) tamamen ayrı, kendi cache'i olan bir hesaplamadır.
-HISTORY_START = datetime(2018, 1, 1, tzinfo=timezone.utc)
+HISTORY_START = datetime(2020, 1, 1, tzinfo=timezone.utc)
 HISTORY_START_MS = int(HISTORY_START.timestamp() * 1000)
 INTERVAL_MS = {'1d': 24 * 60 * 60 * 1000, '4h': 4 * 60 * 60 * 1000}
 INTERVAL_SECONDS = {'1d': 24 * 60 * 60, '4h': 4 * 60 * 60}
@@ -157,7 +156,6 @@ def find_signal_origin(klines):
         'sma': sma_now,
         'price': price_now,
         'complete': complete,
-        'origin_is_current_candle': origin_idx == len(days_with_direction) - 1,
         'pl_history': pl_history,
     }
 
@@ -202,16 +200,18 @@ def fetch_klines_since(symbol, interval, start_ms):
 
     all_klines = []
     end_at = int(time.time())          # şimdi
+    page_span_seconds = interval_seconds * 1500  # bir sayfada en fazla 1500 mum
 
     while True:
+        start_at = max(0, end_at - page_span_seconds)
 
         r = _session.get(
             "https://api.kucoin.com/api/v1/market/candles",
             params={
                 "symbol": symbol,
                 "type": kucoin_type,
+                "startAt": start_at,
                 "endAt": end_at,
-                "limit": 1500
             },
             timeout=15,
         )
@@ -226,6 +226,8 @@ def fetch_klines_since(symbol, interval, start_ms):
         batch = payload.get("data") or []
 
         if not batch:
+            # Bu pencerede hic veri yok; borsanin elindeki en eski veriye
+            # ulasmis olabiliriz. Daha da geriye gitmenin anlami yok.
             break
 
         batch = _normalize_kucoin_klines(batch)
@@ -241,7 +243,7 @@ def fetch_klines_since(symbol, interval, start_ms):
         # bir önceki sayfaya git
         end_at = oldest - interval_seconds
 
-        if len(batch) < 1500:
+        if start_at <= 0:
             break
 
     # duplicate temizle
@@ -251,6 +253,9 @@ def fetch_klines_since(symbol, interval, start_ms):
 
     # başlangıç tarihinden öncekileri at
     klines = [k for k in klines if k[0] >= start_ms]
+
+    if not klines:
+        return klines
 
     interval_ms = INTERVAL_MS.get(interval, INTERVAL_MS["1d"])
     print(
@@ -283,8 +288,10 @@ def compute_signal_history(days, history_start_ms):
 
     history_start_ms'ten bu yana üretilmiş TÜM sinyalleri (yön değişimlerini) bulup
     her birinin kendi giriş/çıkış performansını sırayla bileşik (compounded) olarak
-    zincirler. Böylece "şu an açık olan son sinyal" değil, o tarihten bu yana
-    açılmış olan TÜM sinyallerin toplam performansı elde edilir.
+    zincirler: her sinyalin sonucu bir öncekinin üzerine katlanır (100$ ile başlayıp
+    art arda iki kez %20 kazanınca 144$ olması gibi). Böylece "şu an açık olan son
+    sinyal" değil, o tarihten bu yana açılmış olan TÜM sinyallerin toplam performansı
+    elde edilir.
 
     Dönen değer: (curve, total_pct) — curve, her gün için kümülatif % değerlerinin
     kronolojik listesi (sparkline için); total_pct, curve'ün son (güncel) değeri.
@@ -622,26 +629,6 @@ def fetch_pair_data(symbol, label, pip_size, interval=INTERVAL):
     }
 
 
-def fetch_fear_greed():
-    """Alternative.me Crypto Fear & Greed Index'ten son değeri çeker."""
-    r = _session.get(
-        'https://api.alternative.me/fng/',
-        params={'limit': 1, 'format': 'json'},
-        timeout=10,
-    )
-    r.raise_for_status()
-    data = r.json().get('data') or []
-    if not data:
-        raise ValueError('Fear & Greed verisi bos')
-
-    item = data[0]
-    return {
-        'value': int(item['value']),
-        'classification': item.get('value_classification', ''),
-        'timestamp': int(item['timestamp']),
-    }
-
-
 def _fetch_all():
     results = []
     errors = []
@@ -681,26 +668,12 @@ def _fetch_all():
     except Exception as e:
         errors.append({'symbol': 'TELEGRAM', 'label': 'Telegram', 'error': f'Bildirim hatasi: {e}'})
 
-    fear_greed = None
-    try:
-        fear_greed = fetch_fear_greed()
-    except requests.RequestException as e:
-        errors.append({'symbol': 'FNG', 'label': 'Fear & Greed', 'error': f'Veriye ulasilamadi: {e}'})
-    except Exception as e:
-        errors.append({'symbol': 'FNG', 'label': 'Fear & Greed', 'error': f'Beklenmeyen hata: {e}'})
-
     if errors and not results:
         cached = get_cached_data()
         if cached['pairs']:
-            if fear_greed is None:
-                fear_greed = cached['fear_greed']
-            cached['fear_greed'] = fear_greed
             return cached
 
-    if fear_greed is None:
-        fear_greed = get_cached_data()['fear_greed']
-
-    return {'pairs': results, 'errors': errors, 'fear_greed': fear_greed}
+    return {'pairs': results, 'errors': errors}
 
 
 def get_cached_data():
@@ -708,7 +681,6 @@ def get_cached_data():
         return {
             'pairs': list(_last_good_pairs),
             'errors': list(_last_good_errors),
-            'fear_greed': _last_good_fear_greed,
         }
 
 
@@ -718,7 +690,7 @@ def index():
 
 
 def fetch_all():
-    global _last_good_pairs, _last_good_errors, _last_good_fear_greed
+    global _last_good_pairs, _last_good_errors
 
     with _lock:
         if _cache['data'] and time.time()-_cache['ts']<300:
@@ -734,8 +706,6 @@ def fetch_all():
             _cache['data']=data;_cache['ts']=time.time()
             _last_good_pairs = list(data.get('pairs', []))
             _last_good_errors = list(data.get('errors', []))
-            if data.get('fear_greed') is not None:
-                _last_good_fear_greed = data.get('fear_greed')
         return data
 
 
@@ -769,7 +739,7 @@ def api():
     try:
         return jsonify(fetch_all())
     except Exception as e:
-        return jsonify({'pairs': [], 'errors': [{'symbol': 'SERVER', 'label': 'Sunucu', 'error': str(e)}], 'fear_greed': None}), 500
+        return jsonify({'pairs': [], 'errors': [{'symbol': 'SERVER', 'label': 'Sunucu', 'error': str(e)}]}), 500
 
 
 if __name__ == '__main__':
