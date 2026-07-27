@@ -3,6 +3,14 @@
     "signal": "BUY",
     "since": 1782345600.0
   },
+  "AKE-USDT:1d": {
+    "signal": "BUY",
+    "since": 1784073600.0
+  },
+  "AVAX-USDT:1d": {
+    "signal": "SELL",
+    "since": 1779580800.0
+  },
   "BNBUSDT:1d": {
     "signal": "SELL",
     "since": 1780444800.0
@@ -13,7 +21,7 @@
   },
   "BTC-USDT:4h": {
     "signal": "SELL",
-    "since": 1784822400.0
+    "since": 1784894400.0
   },
   "BTCUSDT:1d": {
     "signal": "SELL",
@@ -23,13 +31,17 @@
     "signal": "BUY",
     "since": 1783569600.0
   },
+  "DEXE-USDT:1d": {
+    "signal": "SELL",
+    "since": 1784592000.0
+  },
   "ETH-USDT:1d": {
     "signal": "BUY",
     "since": 1783641600.0
   },
   "ETH-USDT:4h": {
     "signal": "SELL",
-    "since": 1784822400.0
+    "since": 1784880000.0
   },
   "ETHUSDT:1d": {
     "signal": "SELL",
@@ -38,6 +50,10 @@
   "ETHUSDT:4h": {
     "signal": "BUY",
     "since": 1782907200.0
+  },
+  "LINK-USDT:1d": {
+    "signal": "BUY",
+    "since": 1783987200.0
   },
   "LTC-USDT:1d": {
     "signal": "BUY",
@@ -53,7 +69,7 @@
   },
   "PAXG-USDT:4h": {
     "signal": "BUY",
-    "since": 1784592000.0
+    "since": 1784865600.0
   },
   "PAXGUSDT:1d": {
     "signal": "SELL",
@@ -104,12 +120,12 @@
     "since": 1784160000.0
   },
   "XRP-USDT:1d": {
-    "signal": "BUY",
-    "since": 1784592000.0
+    "signal": "SELL",
+    "since": 1784764800.0
   },
   "XRP-USDT:4h": {
     "signal": "SELL",
-    "since": 1784822400.0
+    "since": 1784880000.0
   },
   "XRPUSDT:1d": {
     "signal": "SELL",
