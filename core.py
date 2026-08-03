@@ -56,7 +56,7 @@ KUCOIN_KLINE_TYPE = {'1d': '1day', '4h': '4hour'}
 # "Gecmis" / "Performans %" hesaplarinin ortak baslangic noktasi. Tum
 # stratejilerin history metriklerinin ADIL KARSILASTIRILABILIR olmasi icin
 # (Top 5 siralamasi vb.) HEPSI ayni tarihten baslar.
-HISTORY_START = datetime(2020, 1, 1)
+HISTORY_START = datetime(2024, 1, 1)
 HISTORY_START_MS = int(HISTORY_START.timestamp() * 1000)
 HISTORY_CACHE_SECONDS = int(os.environ.get('HISTORY_CACHE_SECONDS', '3600'))
 
