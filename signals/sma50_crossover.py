@@ -24,6 +24,9 @@ Telegram'a giden sinyal ve "Performance %" sutunu HER ZAMAN TUTARLI kalir.
 import time
 
 import core
+DEBUG_EXPORT_SYMBOL = "BTC-USDT"
+DEBUG_EXPORT_INTERVAL = "4h"
+DEBUG_EXPORT_FILE = "history_debug.txt"
 
 INTERVAL = '1d'
 SMA_PERIOD = 50
@@ -134,53 +137,101 @@ def compute_daily_directions(klines, sma_period=SMA_PERIOD):
     return days
 
 
-def compute_signal_history(days, history_start_ms):
-    """history_start_ms'ten bu yana uretilen TUM sinyalleri (yon degisimlerini)
-    sirayla zincirler ve kumulatif performansi hesaplar.
+def compute_signal_history(days, history_start_ms, symbol=None, interval=None):
 
-    ONEMLI: Bu TOPLAMSAL (additive), BILESIK (compounded) DEGIL. Her kapanan
-    islemin yuzdesel K/Z'si bir onceki toplamin USTUNE EKLENIR, USTUNE
-    CARPILMAZ. Bilesik/compounding yontemi uzun bir pencerede (orn. 6 yil,
-    yuzlerce sinyal) matematiksel olarak astronomik (trilyonlarca %) sayilar
-    uretebiliyordu; toplamsal yontem hem gercekci hem grafik olarak anlamli/
-    dogrusal bir sonuc verir.
-
-    Donen deger: (curve, total_pct) — curve, her mum icin kumulatif TOPLAMSAL
-    % degerlerinin kronolojik listesi (sparkline icin); total_pct, curve'un
-    son (guncel) degeri. Pencerede hic veri yoksa (None, None) doner.
-    """
     window = [d for d in days if d[0] >= history_start_ms]
 
     if not window:
         return None, None
 
+    debug = (
+        symbol == DEBUG_EXPORT_SYMBOL
+        and interval == DEBUG_EXPORT_INTERVAL
+    )
+
     curve = []
-    cum_pct = 0.0  # onceden KAPANMIS segmentlerin toplam (additive) katkisi
+    cumulative_pct = 0.0
 
     current_direction = window[0][2]
     direction_sign = 1 if current_direction else -1
+
+    entry_time = window[0][0]
     entry_price = window[0][1]
 
+    out = None
+
+    if debug:
+        out = open(DEBUG_EXPORT_FILE, "w", encoding="utf8")
+        out.write(
+            f"History Debug\n"
+            f"Symbol : {symbol}\n"
+            f"Interval : {interval}\n\n"
+        )
+
     for i in range(len(window)):
+
+        close_time = window[i][0]
         close_price = window[i][1]
 
-        unrealized_pct = (close_price - entry_price) / entry_price * 100 * direction_sign
-        curve.append(cum_pct + unrealized_pct)
+        current_trade_pct = (
+            (close_price - entry_price)
+            / entry_price
+            * 100
+            * direction_sign
+        )
 
-        # Sinyal değiştiyse işlemi BU MUMUN KAPANIŞINDA kapat (gerçekleştir)
-        if i < len(window) - 1 and window[i + 1][2] != current_direction:
-            cum_pct += unrealized_pct
+        curve.append(cumulative_pct + current_trade_pct)
 
-            current_direction = window[i + 1][2]
+        # yön değişti
+        if i > 0 and window[i][2] != window[i - 1][2]:
+
+            if debug:
+
+                # İlk satırda başlık yaz
+                if out.tell() == len(
+                    f"History Debug\nSymbol : {symbol}\nInterval : {interval}\n\n"
+                ):
+                    out.write(
+                        f"{'POS':<6}"
+                        f"{'ENTRY TIME':<22}"
+                        f"{'EXIT TIME':<22}"
+                        f"{'ENTRY':>12}"
+                        f"{'EXIT':>12}"
+                        f"{'TRADE %':>12}"
+                        f"{'HISTORY %':>12}\n"
+                    )
+                    out.write("-" * 100 + "\n")
+
+                out.write(
+                    f"{('BUY' if current_direction else 'SELL'):<6}"
+                    f"{time.strftime('%Y-%m-%d %H:%M', time.gmtime(entry_time/1000)):<22}"
+                    f"{time.strftime('%Y-%m-%d %H:%M', time.gmtime(close_time/1000)):<22}"
+                    f"{entry_price:>12.4f}"
+                    f"{close_price:>12.4f}"
+                    f"{current_trade_pct:>11.2f}%"
+                    f"{(cumulative_pct + current_trade_pct):>11.2f}%\n")
+
+            cumulative_pct += current_trade_pct
+
+            current_direction = window[i][2]
             direction_sign = 1 if current_direction else -1
 
-            # Yeni işlem sonraki mumdan değil,
-            # sinyal değişen mumun kapanışından başlar.
+            entry_time = close_time
             entry_price = close_price
 
-    total_pct = curve[-1] if curve else 0.0
-    return curve, total_pct
+            curve[-1] = cumulative_pct
 
+    if debug:
+
+        out.write("\n")
+        out.write("-" * 100 + "\n")
+        out.write(f"{'TOTAL HISTORY PERFORMANCE':<74}{cumulative_pct:>11.2f}%\n")
+
+        out.close()
+
+    total_pct = curve[-1] if curve else 0.0
+
+    return curve, total_pct
 
 def get_signal_history(symbol, interval, sma_period=SMA_PERIOD):
     """2020 başından bu yana bileşik sinyal performansını döndürür (curve, total_pct).
@@ -199,7 +250,8 @@ def get_signal_history(symbol, interval, sma_period=SMA_PERIOD):
 
     klines = core.fetch_klines_since(symbol, interval, fetch_start_ms)
     days = compute_daily_directions(klines, sma_period)
-    curve, total_pct = compute_signal_history(days, core.HISTORY_START_MS)
+
+    curve, total_pct = compute_signal_history(days, core.HISTORY_START_MS, symbol=symbol, interval=interval)
 
     core.set_cached_history(cache_key, curve, total_pct)
     return curve, total_pct

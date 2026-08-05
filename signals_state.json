@@ -1,0 +1,62 @@
+{
+  "AAVE-USDT:1d:sma50_crossover": {
+    "signal": "BUY",
+    "since": 1782345600.0
+  },
+  "BTC-USDT:1d:sma50_crossover": {
+    "signal": "BUY",
+    "since": 1785628800.0
+  },
+  "BTC-USDT:4h:sma50_crossover": {
+    "signal": "BUY",
+    "since": 1785830400.0
+  },
+  "DOT-USDT:1d:sma50_crossover": {
+    "signal": "BUY",
+    "since": 1785801600.0
+  },
+  "ETH-USDT:1d:sma50_crossover": {
+    "signal": "BUY",
+    "since": 1783641600.0
+  },
+  "ETH-USDT:4h:sma50_crossover": {
+    "signal": "SELL",
+    "since": 1785470400.0
+  },
+  "PAXG-USDT:1d:sma50_crossover": {
+    "signal": "SELL",
+    "since": 1778716800.0
+  },
+  "PAXG-USDT:4h:sma50_crossover": {
+    "signal": "BUY",
+    "since": 1785816000.0
+  },
+  "SOL-USDT:1d:sma50_crossover": {
+    "signal": "SELL",
+    "since": 1785456000.0
+  },
+  "SOL-USDT:4h:sma50_crossover": {
+    "signal": "BUY",
+    "since": 1785830400.0
+  },
+  "TAO-USDT:1d:sma50_crossover": {
+    "signal": "SELL",
+    "since": 1781568000.0
+  },
+  "UNI-USDT:1d:sma50_crossover": {
+    "signal": "BUY",
+    "since": 1782950400.0
+  },
+  "XMR-USDT:1d:sma50_crossover": {
+    "signal": "BUY",
+    "since": 1784160000.0
+  },
+  "XRP-USDT:1d:sma50_crossover": {
+    "signal": "SELL",
+    "since": 1784764800.0
+  },
+  "XRP-USDT:4h:sma50_crossover": {
+    "signal": "SELL",
+    "since": 1785888000.0
+  }
+}
